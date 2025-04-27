@@ -1,0 +1,61 @@
+[project]
+# -----------------------------------------------------------------------------
+# Core package metadata.
+# -----------------------------------------------------------------------------
+name = "hews"
+dynamic = ["version"]
+description = "Hews is a terminal-based Hacker News browser, searcher, and reader."
+readme = "README.md"
+requires-python = ">=3.12"
+
+authors = [
+    { name = "Hews Maintainers", email = "koffee2kode@gmail.com" },
+]
+
+keywords = [
+    "hacker-news",
+    "tui",
+    "terminal",
+    "browser",
+]
+
+# -----------------------------------------------------------------------------
+# Runtime dependencies.
+# -----------------------------------------------------------------------------
+dependencies = [
+    "click>=8.1.8",
+    "rich>=14.0.0",
+    "textual>=3.1.1",
+    "httpx>=0.28.1",
+    "loguru>=0.7.3",
+    "platformdirs>=4.2.0",
+    "python-dotenv>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-sugar>=1.0.0",
+    "ruff>=0.11.7",
+    "textual-dev>=1.7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/indrasvat/hews"
+Source = "https://github.com/indrasvat/hews"
+Issues = "https://github.com/indrasvat/hews/issues"
+
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hews", "src/logger_setup"]
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "semver"
+pattern = "default-unprefixed"
