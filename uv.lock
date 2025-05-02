@@ -230,21 +230,21 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = ">=8.1.7" },
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "loguru", specifier = ">=0.7.2" },
+    { name = "click", specifier = ">=8.1.8" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "loguru", specifier = ">=0.7.3" },
     { name = "platformdirs", specifier = ">=4.2.0" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "rich", specifier = ">=13.7.1" },
-    { name = "textual", specifier = ">=0.45.1" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "rich", specifier = ">=14.0.0" },
+    { name = "textual", specifier = ">=3.1.1" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pytest", specifier = ">=8.2.2" },
+    { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest-sugar", specifier = ">=1.0.0" },
     { name = "ruff", specifier = ">=0.11.7" },
-    { name = "textual-dev", specifier = ">=0.0.5" },
+    { name = "textual-dev", specifier = ">=1.7.0" },
 ]
 
 [[package]]
