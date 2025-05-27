@@ -46,6 +46,7 @@ class _BaseJson(TypedDict, total=False):
     by: str
     time: int
     text: str
+    title: str
     url: str
     score: int
     descendants: int
@@ -106,6 +107,7 @@ class ItemBase:
 class Story(ItemBase):
     """Top-level Hacker News post."""
 
+    title: Optional[str] = None
     url: Optional[str] = None
     score: Optional[int] = None
     descendants: Optional[int] = None  # number of comments
@@ -126,6 +128,7 @@ class Story(ItemBase):
             kids=data.get("kids", []),
             dead=data.get("dead", False),
             deleted=data.get("deleted", False),
+            title=data.get("title"),
             url=data.get("url"),
             score=data.get("score"),
             descendants=data.get("descendants"),
