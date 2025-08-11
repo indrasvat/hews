@@ -177,6 +177,7 @@ cython_debug/
 # AI assistant scratch docs (local only)
 CLAUDE.md
 codex.md
+.claude/
 
 # PyPI configuration file
 .pypirc

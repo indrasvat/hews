@@ -39,7 +39,12 @@ dev = [
     "pytest-sugar>=1.0.0",
     "ruff>=0.11.7",
     "textual-dev>=1.7.0",
+    "mypy>=1.13.0",
+    "codespell>=2.3.0",
 ]
+
+[project.scripts]
+hews = "hews.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/indrasvat/hews"
@@ -60,3 +65,29 @@ packages = ["src/hews", "src/logger_setup"]
 vcs = "git"
 style = "semver"
 pattern = "default-unprefixed"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+no_implicit_reexport = true
+namespace_packages = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = [
+    "textual.*",
+    "rich.*",
+    "loguru",
+    "dotenv",
+]
+ignore_missing_imports = true
+
+[tool.codespell]
+skip = "*.lock,*.json,*.svg,.git,__pycache__,.pytest_cache,.venv"
+ignore-words-list = "hews"
+check-filenames = true
+check-hidden = false

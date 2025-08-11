@@ -19,7 +19,6 @@ HNClient = _client.HNClient  # noqa: N802
 
 __all__: list[str] = [
     "Story",
-    "Comment", 
+    "Comment",
     "HNClient",
 ]
-
