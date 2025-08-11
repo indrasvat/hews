@@ -180,3 +180,4 @@ codex.md
 
 # PyPI configuration file
 .pypirc
+.envrc
