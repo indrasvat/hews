@@ -42,9 +42,8 @@ def load_environment() -> None:
     env_path = Path.cwd() / ".env"
     if env_path.exists():
         load_dotenv(env_path)
-        logger.debug(f"Loaded environment from {env_path}")
-    else:
-        logger.debug("No .env file found, using system environment")
+        # Don't log here since logging isn't configured yet
+    # else: No .env file is fine, just use system environment
 
 
 async def fetch_and_print_stories(
