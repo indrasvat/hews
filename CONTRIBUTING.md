@@ -21,14 +21,24 @@ across all machines and CI.
 
 ## Linting & tests
 
-Run these two commands locally before opening a PR:
+**MANDATORY**: Run these checks locally before opening a PR:
 
 ```bash
-ruff check src/ tests/          # static analysis & formatting
-uv run -m pytest  # test suite (pretty output via pytest-sugar)
+make check  # Runs all required checks
 ```
 
-The upcoming CI workflow (issue #49) will execute the exact same steps.
+This single command runs:
+- `ruff` - static analysis & formatting
+- `mypy` - type checking  
+- `codespell` - spell checking
+- `pytest` - test suite
+
+Alternative workflow for auto-fixing:
+```bash
+make pre-commit  # Auto-fixes issues then runs all checks
+```
+
+The CI workflow will execute these exact same checks and will fail if any check doesn't pass.
 
 ## Commit conventions
 
