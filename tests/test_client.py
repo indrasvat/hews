@@ -36,6 +36,34 @@ COMMENT_JSON_RESPONSE = {
     "kids": [],
 }
 
+ALGOLIA_SEARCH_RESPONSE = {
+    "hits": [
+        {
+            "objectID": "123",
+            "title": "Python is great",
+            "url": "https://example.com/python",
+            "author": "pythonista",
+            "points": 100,
+            "num_comments": 25,
+            "created_at_i": 1700000000,
+            "story_text": None,
+        },
+        {
+            "objectID": "456",
+            "title": "Learning Python",
+            "url": "https://example.org/learn",
+            "author": "teacher",
+            "points": 50,
+            "num_comments": 10,
+            "created_at_i": 1700000100,
+            "story_text": "A guide to learning Python",
+        },
+    ],
+    "nbHits": 2,
+    "page": 0,
+    "hitsPerPage": 30,
+}
+
 
 class TestHNClient:
     """Test suite for HNClient class."""
@@ -221,6 +249,145 @@ class TestHNClient:
         assert len(stories) == 2
         assert all(isinstance(story, Story) for story in stories)
 
+    @pytest.mark.asyncio
+    async def test_search_success(self, mock_client):
+        """Test successful story search via Algolia."""
+        # Setup Algolia client mock
+        mock_algolia = AsyncMock(spec=httpx.AsyncClient)
+        mock_client._algolia_client = mock_algolia
+
+        # Mock the search response
+        mock_response = Mock()
+        mock_response.json.return_value = ALGOLIA_SEARCH_RESPONSE
+        mock_response.raise_for_status.return_value = None
+        mock_algolia.get.return_value = mock_response
+
+        # Perform search
+        stories = await mock_client.search("python", limit=30)
+
+        # Verify results
+        assert len(stories) == 2
+        assert all(isinstance(story, Story) for story in stories)
+
+        # Check first story
+        assert stories[0].id == 123
+        assert stories[0].title == "Python is great"
+        assert stories[0].by == "pythonista"
+        assert stories[0].score == 100
+        assert stories[0].descendants == 25
+
+        # Check second story
+        assert stories[1].id == 456
+        assert stories[1].text == "A guide to learning Python"
+
+        # Verify correct API call
+        mock_algolia.get.assert_called_once_with(
+            "/search",
+            params={"query": "python", "tags": "story", "hitsPerPage": "30"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_empty_query(self, mock_client):
+        """Test search with empty query."""
+        mock_client._algolia_client = AsyncMock(spec=httpx.AsyncClient)
+
+        # Empty query should return empty list without making API call
+        stories = await mock_client.search("")
+        assert stories == []
+
+        stories = await mock_client.search("   ")
+        assert stories == []
+
+        # Should not have made any API calls
+        mock_client._algolia_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_search_no_results(self, mock_client):
+        """Test search with no results."""
+        mock_algolia = AsyncMock(spec=httpx.AsyncClient)
+        mock_client._algolia_client = mock_algolia
+
+        # Mock empty response
+        mock_response = Mock()
+        mock_response.json.return_value = {"hits": [], "nbHits": 0}
+        mock_response.raise_for_status.return_value = None
+        mock_algolia.get.return_value = mock_response
+
+        stories = await mock_client.search("xyzabc123unlikely")
+        assert stories == []
+
+    @pytest.mark.asyncio
+    async def test_search_http_error(self, mock_client):
+        """Test search with HTTP error."""
+        mock_algolia = AsyncMock(spec=httpx.AsyncClient)
+        mock_client._algolia_client = mock_algolia
+
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Bad Request", request=AsyncMock(), response=AsyncMock(status_code=400)
+        )
+        mock_algolia.get.return_value = mock_response
+
+        with pytest.raises(HNClientError, match="HTTP error searching"):
+            await mock_client.search("test")
+
+    @pytest.mark.asyncio
+    async def test_search_network_error(self, mock_client):
+        """Test search with network error."""
+        mock_algolia = AsyncMock(spec=httpx.AsyncClient)
+        mock_client._algolia_client = mock_algolia
+
+        mock_algolia.get.side_effect = httpx.RequestError("Connection failed")
+
+        with pytest.raises(HNClientError, match="Network error searching"):
+            await mock_client.search("test")
+
+    @pytest.mark.asyncio
+    async def test_search_not_initialized(self):
+        """Test search on uninitialized client."""
+        client = HNClient()
+
+        with pytest.raises(HNClientError, match="Client not initialized"):
+            await client.search("test")
+
+    @pytest.mark.asyncio
+    async def test_search_invalid_hit_data(self, mock_client):
+        """Test search with malformed hit data."""
+        mock_algolia = AsyncMock(spec=httpx.AsyncClient)
+        mock_client._algolia_client = mock_algolia
+
+        # Mock response with one valid and one invalid hit
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "hits": [
+                {
+                    "objectID": "123",
+                    "title": "Valid story",
+                    "author": "user1",
+                    "points": 10,
+                    "num_comments": 5,
+                    "created_at_i": 1700000000,
+                },
+                {
+                    # Missing objectID - should be skipped
+                    "title": "Invalid story",
+                },
+                {
+                    "objectID": "not_a_number",  # Invalid ID format
+                    "title": "Another invalid",
+                },
+            ]
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_algolia.get.return_value = mock_response
+
+        stories = await mock_client.search("test")
+
+        # Should only return the valid story
+        assert len(stories) == 1
+        assert stories[0].id == 123
+        assert stories[0].title == "Valid story"
+
 
 class TestHNClientIntegration:
     """Integration tests with real HN API calls."""
@@ -260,3 +427,29 @@ class TestHNClientIntegration:
             # Use a very high ID that's unlikely to exist
             with pytest.raises(HNClientError, match="not found"):
                 await client.fetch_item(99999999)
+
+    @pytest.mark.asyncio
+    async def test_search_real_stories(self):
+        """Test searching for real stories via Algolia API."""
+        async with HNClient() as client:
+            # Search for Python stories
+            stories = await client.search("Python", limit=5)
+
+            assert len(stories) <= 5
+            assert all(isinstance(story, Story) for story in stories)
+
+            # Verify stories have expected fields
+            for story in stories:
+                assert story.id > 0
+                assert story.type == ItemType.STORY
+                # Title should contain Python (case-insensitive)
+                if story.title:
+                    assert "python" in story.title.lower() or "Python" in story.title
+
+    @pytest.mark.asyncio
+    async def test_search_empty_results(self):
+        """Test search with query that returns no results."""
+        async with HNClient() as client:
+            # Use a very unlikely search term
+            stories = await client.search("xyzabc123456789unlikely", limit=5)
+            assert stories == []

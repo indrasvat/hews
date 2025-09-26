@@ -99,8 +99,40 @@ async def search_and_print_stories(client: HNClient, query: str) -> None:
         client: HNClient instance
         query: Search query string
     """
-    console.print("\n[bold cyan]Search functionality not yet implemented[/bold cyan]")
-    console.print(f"[dim]Would search for: '{query}'[/dim]\n")
+    try:
+        console.print(f"\n[bold cyan]Searching for '{query}'...[/bold cyan]\n")
+
+        stories = await client.search(query, limit=30)
+
+        if not stories:
+            console.print(f"[yellow]No stories found for '{query}'[/yellow]")
+            return
+
+        table = Table(title=f"Search Results for '{query}'", show_lines=True)
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Title", style="cyan", no_wrap=False)
+        table.add_column("Points", justify="right", style="green")
+        table.add_column("Comments", justify="right", style="yellow")
+        table.add_column("Author", style="magenta")
+        table.add_column("Age", style="dim")
+
+        for idx, story in enumerate(stories, 1):
+            table.add_row(
+                str(idx),
+                story.title or "Untitled",
+                str(story.score or 0),
+                str(story.descendants or 0),
+                story.by or "unknown",
+                story.age() if story.time else "unknown",
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Found {len(stories)} stories[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error searching stories: {e}[/red]")
+        logger.exception("Failed to search stories")
+        sys.exit(1)
 
 
 async def run_print_mode(section: Optional[str], search: Optional[str]) -> None:
@@ -160,7 +192,7 @@ def launch_tui(
     "--search",
     "-q",
     type=str,
-    help="Search query (not yet implemented)",
+    help="Search for stories matching a query",
 )
 @click.option(
     "--print",
@@ -182,7 +214,7 @@ def cli(section: Optional[str], search: Optional[str], print_mode: bool) -> None
 
         hews --section top --print    # Print top stories
 
-        hews --search "python" --print  # Search and print (coming soon)
+        hews --search "python" --print  # Search for stories about Python
     """
     load_environment()
     setup_logging()
