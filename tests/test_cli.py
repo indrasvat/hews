@@ -84,16 +84,22 @@ def test_cli_search_without_print_launches_tui(runner):
     assert "Would start with search: 'python'" in result.output
 
 
-def test_cli_search_with_print_placeholder(runner):
-    """Test that --search --print shows placeholder message."""
+def test_cli_search_with_print(runner):
+    """Test that --search --print works correctly."""
     with patch("hews.cli.HNClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value.__aenter__.return_value = mock_client
 
+        # Mock the search method to return empty list
+        mock_client.search.return_value = []
+
         result = runner.invoke(cli, ["--search", "python", "--print"])
         assert result.exit_code == 0
-        assert "Search functionality not yet implemented" in result.output
-        assert "Would search for: 'python'" in result.output
+        assert "Searching for 'python'" in result.output
+        assert "No stories found" in result.output
+
+        # Verify search was called
+        mock_client.search.assert_called_once_with("python", limit=30)
 
 
 def test_cli_print_without_section_or_search_errors(runner):

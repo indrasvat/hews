@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-from typing import Any, List, Optional, Union
-from urllib.parse import urlencode
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -246,7 +245,7 @@ class HNClient:
         except Exception as e:
             raise HNClientError(f"Unexpected error searching for '{query}': {e}") from e
 
-    def _algolia_hit_to_story(self, hit: dict) -> Optional[Story]:
+    def _algolia_hit_to_story(self, hit: Dict[str, Any]) -> Optional[Story]:
         """Convert an Algolia search hit to a Story object.
 
         Args:
