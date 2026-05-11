@@ -1,4 +1,6 @@
 # hews
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
+
 *Hews* is a terminal-based Hacker News browser, searcher, and reader.
 
 ---
