@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
 
@@ -37,16 +37,25 @@ class HNClient:
         "jobs": "/jobstories.json",  # alias
     }
 
-    def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
+    def __init__(
+        self,
+        http_client: Optional[httpx.AsyncClient] = None,
+        algolia_client: Optional[httpx.AsyncClient] = None,
+        clock: Optional[Callable[[], datetime.datetime]] = None,
+    ):
         """Initialize HNClient.
 
         Args:
             http_client: Optional httpx.AsyncClient instance. If None, a new one
                         will be created with appropriate settings.
+            algolia_client: Optional httpx.AsyncClient for Algolia search requests.
+            clock: Optional callable returning the current datetime.
         """
         self._http_client = http_client
-        self._algolia_client: Optional[httpx.AsyncClient] = None
-        self._owned_client = http_client is None
+        self._algolia_client = algolia_client
+        self._clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
+        self._owned_http_client = http_client is None
+        self._owned_algolia_client = algolia_client is None
 
     async def __aenter__(self) -> "HNClient":
         """Async context manager entry."""
@@ -66,11 +75,10 @@ class HNClient:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
-        if self._owned_client:
-            if self._http_client:
-                await self._http_client.aclose()
-            if self._algolia_client:
-                await self._algolia_client.aclose()
+        if self._owned_http_client and self._http_client:
+            await self._http_client.aclose()
+        if self._owned_algolia_client and self._algolia_client:
+            await self._algolia_client.aclose()
 
     async def fetch_stories(self, section: str, limit: int = 30) -> List[Story]:
         """Fetch stories from a specific HN section.
@@ -262,12 +270,12 @@ class HNClient:
 
             # Parse timestamp
             created_at = hit.get("created_at_i")
-            if created_at:
+            if created_at is not None:
                 time = datetime.datetime.fromtimestamp(
                     created_at, datetime.timezone.utc
                 )
             else:
-                time = datetime.datetime.now(datetime.timezone.utc)
+                time = self._clock()
 
             # Create Story object with available fields
             return Story(
