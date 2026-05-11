@@ -1,4 +1,8 @@
 # hews
+
+![Python](https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 *Hews* is a terminal-based Hacker News browser, searcher, and reader.
 
 ---
