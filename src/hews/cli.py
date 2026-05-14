@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from hews import HNClient
+from hews.tui import HewsApp
 
 
 console = Console()
@@ -163,22 +164,7 @@ def launch_tui(
         initial_section: Initial section to display
         initial_search: Initial search query to execute
     """
-    console.print("\n[bold yellow]TUI mode not yet implemented[/bold yellow]")
-    console.print(
-        "[dim]The interactive terminal UI will be available in a future update.[/dim]"
-    )
-
-    if initial_search:
-        console.print(f"[dim]Would start with search: '{initial_search}'[/dim]")
-    elif initial_section:
-        console.print(f"[dim]Would start with section: {initial_section}[/dim]")
-    else:
-        console.print("[dim]Would start with default view (top stories)[/dim]")
-
-    console.print("\n[cyan]For now, try using --print mode:[/cyan]")
-    console.print("  hews --section top --print")
-    console.print("  hews --section new --print")
-    console.print()
+    HewsApp(initial_section=initial_section, initial_search=initial_search).run()
 
 
 @click.command()
@@ -186,13 +172,13 @@ def launch_tui(
     "--section",
     "-s",
     type=click.Choice(["top", "new", "ask", "show", "jobs"], case_sensitive=False),
-    help="HN section to fetch (top, new, ask, show, jobs)",
+    help="HN section to fetch; cannot be used with --search",
 )
 @click.option(
     "--search",
     "-q",
     type=str,
-    help="Search for stories matching a query",
+    help="Search stories by query; cannot be used with --section",
 )
 @click.option(
     "--print",
@@ -205,16 +191,19 @@ def launch_tui(
 def cli(section: Optional[str], search: Optional[str], print_mode: bool) -> None:
     """Hews - A terminal-based Hacker News browser, searcher, and reader.
 
-    When run without options, launches the interactive TUI (not yet implemented).
+    When run without options, launches the interactive TUI.
     Use --print with --section or --search to output stories to stdout.
+    --section and --search are mutually exclusive.
 
     Examples:
 
-        hews                          # Launch TUI (coming soon)
+        hews                          # Launch TUI
 
         hews --section top --print    # Print top stories
 
         hews --search "python" --print  # Search for stories about Python
+
+        hews --search "python"        # Launch TUI with Python search results
     """
     load_environment()
     setup_logging()
