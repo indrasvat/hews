@@ -51,6 +51,10 @@ def test_cli_help(runner):
     assert "--section" in result.output
     assert "--search" in result.output
     assert "--print" in result.output
+    normalized_output = " ".join(result.output.split())
+    assert "--section and --search are mutually exclusive" in normalized_output
+    assert "exclusive" in result.output
+    assert 'hews --search "python"' in result.output
 
 
 def test_cli_version(runner):
@@ -62,26 +66,32 @@ def test_cli_version(runner):
 
 def test_cli_no_args_launches_tui(runner):
     """Test that running without args attempts to launch TUI."""
-    result = runner.invoke(cli, [])
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, [])
+
     assert result.exit_code == 0
-    assert "TUI mode not yet implemented" in result.output
-    assert "Would start with default view" in result.output
+    mock_app.assert_called_once_with(initial_section=None, initial_search=None)
+    mock_app.return_value.run.assert_called_once_with()
 
 
 def test_cli_section_without_print_launches_tui(runner):
     """Test that --section without --print launches TUI with section."""
-    result = runner.invoke(cli, ["--section", "top"])
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, ["--section", "top"])
+
     assert result.exit_code == 0
-    assert "TUI mode not yet implemented" in result.output
-    assert "Would start with section: top" in result.output
+    mock_app.assert_called_once_with(initial_section="top", initial_search=None)
+    mock_app.return_value.run.assert_called_once_with()
 
 
 def test_cli_search_without_print_launches_tui(runner):
     """Test that --search without --print launches TUI with search."""
-    result = runner.invoke(cli, ["--search", "python"])
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, ["--search", "python"])
+
     assert result.exit_code == 0
-    assert "TUI mode not yet implemented" in result.output
-    assert "Would start with search: 'python'" in result.output
+    mock_app.assert_called_once_with(initial_section=None, initial_search="python")
+    mock_app.return_value.run.assert_called_once_with()
 
 
 def test_cli_search_with_print(runner):
