@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -17,6 +19,24 @@ class HNClientError(Exception):
     """Base exception for HNClient errors."""
 
 
+class _HiddenInputParser(HTMLParser):
+    """Collect hidden form values from a small HTML document."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.values: Dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "input":
+            return
+        attr_map = {name: value or "" for name, value in attrs}
+        if attr_map.get("type") != "hidden":
+            return
+        name = attr_map.get("name")
+        if name:
+            self.values[name] = attr_map.get("value", "")
+
+
 class HNClient:
     """Asynchronous client for fetching data from the Hacker News API.
 
@@ -27,6 +47,7 @@ class HNClient:
 
     BASE_URL = "https://hacker-news.firebaseio.com/v0"
     ALGOLIA_BASE_URL = "https://hn.algolia.com/api/v1"
+    HN_WEB_BASE_URL = "https://news.ycombinator.com"
     CACHE_TTL_SECONDS = 30 * 60
 
     # HN API endpoints for different story sections
@@ -57,6 +78,7 @@ class HNClient:
         self._algolia_client: Optional[httpx.AsyncClient] = None
         self._owned_client = http_client is None
         self._cache_manager = cache_manager or CacheManager()
+        self.is_authenticated = False
 
     async def __aenter__(self) -> "HNClient":
         """Async context manager entry."""
@@ -74,6 +96,62 @@ class HNClient:
             )
         return self
 
+    async def login(self, username: str, password: str) -> bool:
+        """Authenticate with Hacker News and keep the session cookie in memory.
+
+        Args:
+            username: Hacker News username.
+            password: Hacker News password.
+
+        Returns:
+            True when HN sets a session cookie, otherwise False.
+
+        Raises:
+            HNClientError: If the client has not been initialized.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not username or not password:
+            return False
+
+        try:
+            login_url = f"{self.HN_WEB_BASE_URL}/login"
+            login_page = await self._http_client.get(login_url)
+            login_page.raise_for_status()
+
+            hidden_fields = self._parse_hidden_inputs(login_page.text)
+            fnid = hidden_fields.get("fnid")
+            if not fnid:
+                logger.debug("HN login form did not include fnid")
+                return False
+
+            form_data = {
+                **hidden_fields,
+                "acct": username,
+                "pw": password,
+                "goto": hidden_fields.get("goto", "news"),
+            }
+            response = await self._http_client.post(login_url, data=form_data)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.debug("HN login request failed: {}", exc)
+            self.is_authenticated = False
+            return False
+
+        self.is_authenticated = self._has_hn_user_cookie()
+        if not self.is_authenticated:
+            logger.debug("HN login failed for user {}", username)
+        return self.is_authenticated
+
+    async def login_from_env(self) -> bool:
+        """Log in with HN_USERNAME/HN_PASSWORD when both are present."""
+        username = os.environ.get("HN_USERNAME")
+        password = os.environ.get("HN_PASSWORD")
+        if not username or not password:
+            return False
+        return await self.login(username, password)
+
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         if self._owned_client:
@@ -81,6 +159,16 @@ class HNClient:
                 await self._http_client.aclose()
             if self._algolia_client:
                 await self._algolia_client.aclose()
+
+    def _parse_hidden_inputs(self, html: str) -> Dict[str, str]:
+        parser = _HiddenInputParser()
+        parser.feed(html)
+        return parser.values
+
+    def _has_hn_user_cookie(self) -> bool:
+        if not self._http_client:
+            return False
+        return self._http_client.cookies.get("user") is not None
 
     async def fetch_stories(
         self, section: str, limit: int = 30, force_refresh: bool = False

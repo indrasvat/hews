@@ -6,6 +6,7 @@ from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Footer, Header, Static
+from loguru import logger
 
 from hews import HNClient, Story
 
@@ -47,6 +48,9 @@ class HewsApp(App[None]):
 
         try:
             async with HNClient() as client:
+                logged_in = await client.login_from_env()
+                if logged_in:
+                    logger.info("Logged in to Hacker News")
                 if self.initial_search:
                     status.update(f"Search results for '{self.initial_search}'")
                     stories = await client.search(self.initial_search, limit=30)
@@ -61,6 +65,8 @@ class HewsApp(App[None]):
             self.display_stories(stories)
             if not stories:
                 status.update(f"{status.renderable} - no stories found")
+            elif logged_in:
+                status.update(f"{status.renderable} - logged in")
         except Exception as exc:
             status.update(f"Error loading stories: {exc}")
 

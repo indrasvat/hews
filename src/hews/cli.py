@@ -93,6 +93,16 @@ async def fetch_and_print_stories(
         sys.exit(1)
 
 
+async def authenticate_client_from_env(client: HNClient) -> bool:
+    """Authenticate the client when HN credentials are configured."""
+    logged_in = bool(await client.login_from_env())
+    if logged_in:
+        logger.info("Logged in to Hacker News")
+    elif os.environ.get("HN_USERNAME") or os.environ.get("HN_PASSWORD"):
+        logger.warning("Hacker News login failed or credentials are incomplete")
+    return logged_in
+
+
 async def search_and_print_stories(client: HNClient, query: str) -> None:
     """Search for stories and print them to stdout.
 
@@ -144,6 +154,7 @@ async def run_print_mode(section: Optional[str], search: Optional[str]) -> None:
         search: Search query (if provided)
     """
     async with HNClient() as client:
+        await authenticate_client_from_env(client)
         if search:
             await search_and_print_stories(client, search)
         elif section:

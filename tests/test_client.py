@@ -371,6 +371,106 @@ class TestHNClient:
         with pytest.raises(HNClientError, match="Client not initialized"):
             await client.fetch_item(123)
 
+        with pytest.raises(HNClientError, match="Client not initialized"):
+            await client.login("user", "password")
+
+    @pytest.mark.asyncio
+    async def test_login_success_sets_authenticated(self, mock_client):
+        """Successful HN login keeps the user cookie on the shared client."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="hidden" name="goto" value="news"></form>'
+        )
+        login_page.raise_for_status.return_value = None
+
+        login_response = Mock()
+        login_response.raise_for_status.return_value = None
+
+        async def post_login(*args, **kwargs):
+            mock_client._http_client.cookies.set(
+                "user", "testuser&session", domain="news.ycombinator.com"
+            )
+            return login_response
+
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.side_effect = post_login
+
+        assert await mock_client.login("testuser", "secret") is True
+        assert mock_client.is_authenticated is True
+        assert mock_client._http_client.cookies.get("user") == "testuser&session"
+        mock_client._http_client.get.assert_called_once_with(
+            "https://news.ycombinator.com/login"
+        )
+        mock_client._http_client.post.assert_called_once_with(
+            "https://news.ycombinator.com/login",
+            data={
+                "fnid": "abc123",
+                "goto": "news",
+                "acct": "testuser",
+                "pw": "secret",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_login_failure_without_cookie_returns_false(self, mock_client):
+        """HN login failure is represented as False without raising."""
+        login_page = Mock()
+        login_page.text = '<input type="hidden" name="fnid" value="abc123">'
+        login_page.raise_for_status.return_value = None
+        login_response = Mock()
+        login_response.raise_for_status.return_value = None
+
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.return_value = login_response
+
+        assert await mock_client.login("testuser", "bad-secret") is False
+        assert mock_client.is_authenticated is False
+
+    @pytest.mark.asyncio
+    async def test_login_missing_fnid_returns_false(self, mock_client):
+        """A changed login form fails gracefully."""
+        login_page = Mock()
+        login_page.text = "<form></form>"
+        login_page.raise_for_status.return_value = None
+
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+
+        assert await mock_client.login("testuser", "secret") is False
+        mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_from_env_skips_incomplete_credentials(
+        self, mock_client, monkeypatch
+    ):
+        """Missing env credentials leave the client in read-only mode."""
+        monkeypatch.delenv("HN_USERNAME", raising=False)
+        monkeypatch.setenv("HN_PASSWORD", "secret")
+        mock_client.login = AsyncMock(return_value=True)
+
+        assert await mock_client.login_from_env() is False
+        mock_client.login.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_does_not_log_password(self, mock_client, capsys):
+        """Failed login logging must not expose the password."""
+        login_page = Mock()
+        login_page.text = '<input type="hidden" name="fnid" value="abc123">'
+        login_page.raise_for_status.return_value = None
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.side_effect = httpx.RequestError(
+            "Connection failed"
+        )
+
+        assert await mock_client.login("testuser", "top-secret-password") is False
+        output = capsys.readouterr()
+        assert "top-secret-password" not in output.err
+        assert "top-secret-password" not in output.out
+
     @pytest.mark.asyncio
     async def test_section_aliases(self, mock_client):
         """Test that section aliases work correctly."""
