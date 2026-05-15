@@ -20,21 +20,47 @@ class HNClientError(Exception):
 
 
 class _HiddenInputParser(HTMLParser):
-    """Collect hidden form values from a small HTML document."""
+    """Collect hidden values from the form that accepts HN credentials."""
 
     def __init__(self) -> None:
         super().__init__()
+        self._current_form: tuple[Dict[str, str], set[str]] | None = None
         self.values: Dict[str, str] = {}
 
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "form":
+            self._current_form = ({}, set())
+            return
+
         if tag != "input":
             return
         attr_map = {name: value or "" for name, value in attrs}
-        if attr_map.get("type") != "hidden":
-            return
         name = attr_map.get("name")
-        if name:
-            self.values[name] = attr_map.get("value", "")
+        if not name or self._current_form is None:
+            return
+
+        hidden_values, input_names = self._current_form
+        input_names.add(name)
+        if attr_map.get("type") == "hidden":
+            hidden_values[name] = attr_map.get("value", "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "form" or self._current_form is None:
+            return
+
+        hidden_values, input_names = self._current_form
+        if (
+            {"acct", "pw"}.issubset(input_names)
+            and "creating" not in hidden_values
+            and not self.values
+        ):
+            self.values = hidden_values
+        self._current_form = None
 
 
 class HNClient:

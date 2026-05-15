@@ -380,7 +380,9 @@ class TestHNClient:
         login_page = Mock()
         login_page.text = (
             '<form><input type="hidden" name="fnid" value="abc123">'
-            '<input type="hidden" name="goto" value="news"></form>'
+            '<input type="hidden" name="goto" value="news">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
         )
         login_page.raise_for_status.return_value = None
 
@@ -417,7 +419,11 @@ class TestHNClient:
     async def test_login_failure_without_cookie_returns_false(self, mock_client):
         """HN login failure is represented as False without raising."""
         login_page = Mock()
-        login_page.text = '<input type="hidden" name="fnid" value="abc123">'
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
         login_page.raise_for_status.return_value = None
         login_response = Mock()
         login_response.raise_for_status.return_value = None
@@ -433,7 +439,10 @@ class TestHNClient:
     async def test_login_missing_fnid_returns_false(self, mock_client):
         """A changed login form fails gracefully."""
         login_page = Mock()
-        login_page.text = "<form></form>"
+        login_page.text = (
+            '<form><input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
         login_page.raise_for_status.return_value = None
 
         mock_client._http_client.cookies = httpx.Cookies()
@@ -458,7 +467,11 @@ class TestHNClient:
     async def test_login_does_not_log_password(self, mock_client, capsys):
         """Failed login logging must not expose the password."""
         login_page = Mock()
-        login_page.text = '<input type="hidden" name="fnid" value="abc123">'
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
         login_page.raise_for_status.return_value = None
         mock_client._http_client.cookies = httpx.Cookies()
         mock_client._http_client.get.return_value = login_page
@@ -470,6 +483,43 @@ class TestHNClient:
         output = capsys.readouterr()
         assert "top-secret-password" not in output.err
         assert "top-secret-password" not in output.out
+
+    @pytest.mark.asyncio
+    async def test_login_ignores_signup_hidden_fields(self, mock_client):
+        """Login must not include hidden inputs from HN's create-account form."""
+        login_page = Mock()
+        login_page.text = (
+            '<form action="login">'
+            '<input type="hidden" name="fnid" value="login-token">'
+            '<input type="hidden" name="goto" value="news">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw">'
+            "</form>"
+            '<form action="login">'
+            '<input type="hidden" name="fnid" value="signup-token">'
+            '<input type="hidden" name="creating" value="t">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw">'
+            "</form>"
+        )
+        login_page.raise_for_status.return_value = None
+        login_response = Mock()
+        login_response.raise_for_status.return_value = None
+
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.return_value = login_response
+
+        assert await mock_client.login("testuser", "secret") is False
+        mock_client._http_client.post.assert_called_once_with(
+            "https://news.ycombinator.com/login",
+            data={
+                "fnid": "login-token",
+                "goto": "news",
+                "acct": "testuser",
+                "pw": "secret",
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_section_aliases(self, mock_client):
