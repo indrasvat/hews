@@ -162,7 +162,12 @@ class HNClient:
                 raise HNClientError(f"Item {item_id} not found")
 
             item = item_from_json(item_data)
-            self._cache_manager.save_item(item)
+            try:
+                self._cache_manager.save_item(item)
+            except Exception:
+                # A local cache problem must not turn a successful API fetch into
+                # a failed item load.
+                pass
             return item
 
         except httpx.HTTPStatusError as e:
