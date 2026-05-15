@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from .cache import CacheManager
 from .models import Comment, Story, ItemType, item_from_json
 
 
@@ -37,16 +38,23 @@ class HNClient:
         "jobs": "/jobstories.json",  # alias
     }
 
-    def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
+    def __init__(
+        self,
+        http_client: Optional[httpx.AsyncClient] = None,
+        cache_manager: Optional[CacheManager] = None,
+    ):
         """Initialize HNClient.
 
         Args:
             http_client: Optional httpx.AsyncClient instance. If None, a new one
                         will be created with appropriate settings.
+            cache_manager: Optional CacheManager instance. If None, a default
+                           SQLite cache will be created.
         """
         self._http_client = http_client
         self._algolia_client: Optional[httpx.AsyncClient] = None
         self._owned_client = http_client is None
+        self._cache_manager = cache_manager or CacheManager()
 
     async def __aenter__(self) -> "HNClient":
         """Async context manager entry."""
@@ -153,7 +161,14 @@ class HNClient:
             if not item_data:
                 raise HNClientError(f"Item {item_id} not found")
 
-            return item_from_json(item_data)
+            item = item_from_json(item_data)
+            try:
+                self._cache_manager.save_item(item)
+            except Exception:
+                # A local cache problem must not turn a successful API fetch into
+                # a failed item load.
+                pass
+            return item
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

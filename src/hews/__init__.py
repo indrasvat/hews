@@ -12,13 +12,16 @@ from importlib import import_module as _import_module
 
 _models = _import_module("hews.models")
 _client = _import_module("hews.client")
+_cache = _import_module("hews.cache")
 
 Story = _models.Story  # noqa: N802 – keep PascalCase (public API)
 Comment = _models.Comment  # noqa: N802
 HNClient = _client.HNClient  # noqa: N802
+CacheManager = _cache.CacheManager  # noqa: N802
 
 __all__: list[str] = [
     "Story",
     "Comment",
     "HNClient",
+    "CacheManager",
 ]

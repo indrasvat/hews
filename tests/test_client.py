@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
 from hews.client import HNClient, HNClientError
+from hews.cache import CacheManager
 from hews.models import Comment, ItemType, Story
 
 
@@ -69,10 +71,13 @@ class TestHNClient:
     """Test suite for HNClient class."""
 
     @pytest.fixture
-    def mock_client(self):
+    def mock_client(self, tmp_path):
         """Create an HNClient with a mocked httpx client."""
         mock_http = AsyncMock(spec=httpx.AsyncClient)
-        client = HNClient(http_client=mock_http)
+        client = HNClient(
+            http_client=mock_http,
+            cache_manager=CacheManager(tmp_path / "cache.db"),
+        )
         client._http_client = mock_http
         return client
 
@@ -155,8 +160,26 @@ class TestHNClient:
         assert isinstance(item, Story)
         assert item.id == 123
         assert item.title == "Test Story"
+        assert mock_client._cache_manager.get_item(123) == item
 
         mock_client._http_client.get.assert_called_with("/item/123.json")
+
+    @pytest.mark.asyncio
+    async def test_fetch_item_returns_item_when_cache_write_fails(self, mock_client):
+        """Test cache write failures do not fail successful item fetches."""
+        mock_response = Mock()
+        mock_response.json.return_value = STORY_JSON_RESPONSE
+        mock_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = mock_response
+        mock_client._cache_manager.save_item = Mock(
+            side_effect=sqlite3.OperationalError("database is locked")
+        )
+
+        item = await mock_client.fetch_item(123)
+
+        assert isinstance(item, Story)
+        assert item.id == 123
+        mock_client._cache_manager.save_item.assert_called_once_with(item)
 
     @pytest.mark.asyncio
     async def test_fetch_item_comment_success(self, mock_client):
