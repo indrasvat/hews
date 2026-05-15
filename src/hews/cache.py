@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Union, cast
 
@@ -43,6 +44,29 @@ class CacheManager:
         data = json.loads(cast(str, row["json"]))
         return item_from_json(data)
 
+    def get_item_fetched_at(self, item_id: int) -> int | None:
+        """Return an item's cache timestamp, or None if it is not cached."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT fetched_at FROM items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+        return cast(int, row["fetched_at"])
+
+    def get_fresh_item(self, item_id: int, max_age_seconds: int) -> CachedItem | None:
+        """Return a cached item only when it is fresh enough."""
+
+        fetched_at = self.get_item_fetched_at(item_id)
+        if fetched_at is None:
+            return None
+        if int(time.time()) - fetched_at > max_age_seconds:
+            return None
+        return self.get_item(item_id)
+
     def save_item(self, item: CachedItem) -> None:
         """Insert or update an item in the cache."""
 
@@ -62,6 +86,38 @@ class CacheManager:
                 (item.id, item.type.value, payload, fetched_at),
             )
 
+    def save_story_ids(self, section: str, story_ids: Sequence[int]) -> None:
+        """Persist the latest story IDs for a section."""
+
+        payload = json.dumps(list(story_ids), separators=(",", ":"))
+        fetched_at = int(time.time())
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO sections (section, story_ids, fetched_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(section) DO UPDATE SET
+                    story_ids = excluded.story_ids,
+                    fetched_at = excluded.fetched_at
+                """,
+                (section, payload, fetched_at),
+            )
+
+    def get_story_ids(self, section: str) -> list[int]:
+        """Return cached story IDs for a section, or an empty list."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT story_ids FROM sections WHERE section = ?",
+                (section,),
+            ).fetchone()
+
+        if row is None:
+            return []
+        story_ids = json.loads(cast(str, row["story_ids"]))
+        return [int(story_id) for story_id in story_ids]
+
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -78,6 +134,15 @@ class CacheManager:
                 """
                 CREATE INDEX IF NOT EXISTS idx_items_type
                 ON items(type)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sections (
+                    section TEXT PRIMARY KEY,
+                    story_ids TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                )
                 """
             )
 

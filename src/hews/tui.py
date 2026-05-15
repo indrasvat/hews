@@ -14,7 +14,7 @@ class HewsApp(App[None]):
     """Minimal Textual app for displaying HN story lists."""
 
     TITLE = "Hews"
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("r", "refresh", "Refresh"), ("q", "quit", "Quit")]
 
     def __init__(
         self,
@@ -39,7 +39,7 @@ class HewsApp(App[None]):
         table.add_columns("#", "Title", "Points", "Comments", "Author", "Age")
         await self.load_stories()
 
-    async def load_stories(self) -> None:
+    async def load_stories(self, force_refresh: bool = False) -> None:
         """Fetch and display either initial search results or a section."""
         status = self.query_one("#status", Static)
         table = self.query_one("#stories", DataTable)
@@ -52,13 +52,22 @@ class HewsApp(App[None]):
                     stories = await client.search(self.initial_search, limit=30)
                 else:
                     status.update(f"{self.initial_section.capitalize()} stories")
-                    stories = await client.fetch_stories(self.initial_section, limit=30)
+                    stories = await client.fetch_stories(
+                        self.initial_section,
+                        limit=30,
+                        force_refresh=force_refresh,
+                    )
 
             self.display_stories(stories)
             if not stories:
                 status.update(f"{status.renderable} - no stories found")
         except Exception as exc:
             status.update(f"Error loading stories: {exc}")
+
+    async def action_refresh(self) -> None:
+        """Refresh stories, bypassing the item cache."""
+
+        await self.load_stories(force_refresh=True)
 
     def display_stories(self, stories: list[Story]) -> None:
         """Populate the table with stories."""
