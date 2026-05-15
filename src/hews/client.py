@@ -253,17 +253,21 @@ class HNClient:
         return item
 
     def _save_section_story_ids(self, section: str, story_ids: List[int]) -> None:
+        cache_key = self._section_cache_key(section)
         try:
-            self._cache_manager.save_story_ids(section, story_ids)
-            logger.debug("Saved {} story IDs for {} to cache", len(story_ids), section)
+            self._cache_manager.save_story_ids(cache_key, story_ids)
+            logger.debug(
+                "Saved {} story IDs for {} to cache", len(story_ids), cache_key
+            )
         except Exception as exc:
-            logger.debug("Failed to cache story IDs for {}: {}", section, exc)
+            logger.debug("Failed to cache story IDs for {}: {}", cache_key, exc)
 
     def _get_cached_section_stories(self, section: str, limit: int) -> List[Story]:
+        cache_key = self._section_cache_key(section)
         try:
-            story_ids = self._cache_manager.get_story_ids(section)[:limit]
+            story_ids = self._cache_manager.get_story_ids(cache_key)[:limit]
         except Exception as exc:
-            logger.debug("Failed to read cached story IDs for {}: {}", section, exc)
+            logger.debug("Failed to read cached story IDs for {}: {}", cache_key, exc)
             return []
 
         stories: List[Story] = []
@@ -272,8 +276,13 @@ class HNClient:
             if isinstance(item, Story):
                 stories.append(item)
         if stories:
-            logger.debug("Serving {} cached {} stories", len(stories), section)
+            logger.debug("Serving {} cached {} stories", len(stories), cache_key)
         return stories
+
+    def _section_cache_key(self, section: str) -> str:
+        if section == "jobs":
+            return "job"
+        return section
 
     async def search(self, query: str, limit: int = 30) -> List[Story]:
         """Search for stories using the Algolia Search API.

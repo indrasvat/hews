@@ -164,6 +164,34 @@ class TestHNClient:
         assert stories[0].title == story.title
 
     @pytest.mark.asyncio
+    async def test_fetch_stories_uses_same_cache_key_for_job_aliases(self, mock_client):
+        """The job/jobs aliases share section IDs for offline fallback."""
+        story = Story(id=123, type=ItemType.JOB, title="Cached Job")
+        ids_response = Mock()
+        ids_response.json.return_value = [123]
+        ids_response.raise_for_status.return_value = None
+        item_response = Mock()
+        item_response.json.return_value = {**STORY_JSON_RESPONSE, "type": "job"}
+        item_response.raise_for_status.return_value = None
+        mock_client._http_client.get.side_effect = [ids_response, item_response]
+
+        await mock_client.fetch_stories("jobs", limit=1)
+
+        assert mock_client._cache_manager.get_story_ids("job") == [123]
+
+        mock_client._cache_manager.save_item(story)
+        mock_client._http_client.get.reset_mock()
+        mock_client._http_client.get.side_effect = httpx.RequestError(
+            "Connection failed"
+        )
+
+        stories = await mock_client.fetch_stories("job", limit=1)
+
+        assert len(stories) == 1
+        assert stories[0].id == story.id
+        assert stories[0].title == story.title
+
+    @pytest.mark.asyncio
     async def test_fetch_stories_invalid_section(self, mock_client):
         """Test fetch_stories with invalid section name."""
         with pytest.raises(HNClientError, match="Invalid section 'invalid'"):
