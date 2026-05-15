@@ -67,3 +67,29 @@ def test_cache_schema_has_fetched_timestamp(tmp_path: Path) -> None:
 
     assert row is not None
     assert isinstance(row[0], int)
+
+
+def test_get_fresh_item_returns_only_fresh_items(tmp_path: Path) -> None:
+    """CacheManager can reject stale entries by fetched timestamp."""
+
+    cache_path = tmp_path / "cache.db"
+    cache = CacheManager(cache_path)
+    cache.save_item(Story(id=1, type=ItemType.STORY, title="First"))
+
+    assert cache.get_fresh_item(1, max_age_seconds=60) is not None
+
+    with sqlite3.connect(cache_path) as conn:
+        conn.execute("UPDATE items SET fetched_at = 1 WHERE id = 1")
+
+    assert cache.get_fresh_item(1, max_age_seconds=60) is None
+
+
+def test_save_and_get_section_story_ids(tmp_path: Path) -> None:
+    """CacheManager saves and restores ordered section story IDs."""
+
+    cache = CacheManager(tmp_path / "cache.db")
+
+    cache.save_story_ids("top", [123, 456, 789])
+
+    assert cache.get_story_ids("top") == [123, 456, 789]
+    assert cache.get_story_ids("new") == []

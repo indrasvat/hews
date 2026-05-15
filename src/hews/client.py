@@ -7,6 +7,7 @@ import datetime
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
+from loguru import logger
 
 from .cache import CacheManager
 from .models import Comment, Story, ItemType, item_from_json
@@ -26,6 +27,7 @@ class HNClient:
 
     BASE_URL = "https://hacker-news.firebaseio.com/v0"
     ALGOLIA_BASE_URL = "https://hn.algolia.com/api/v1"
+    CACHE_TTL_SECONDS = 30 * 60
 
     # HN API endpoints for different story sections
     SECTION_ENDPOINTS = {
@@ -80,12 +82,15 @@ class HNClient:
             if self._algolia_client:
                 await self._algolia_client.aclose()
 
-    async def fetch_stories(self, section: str, limit: int = 30) -> List[Story]:
+    async def fetch_stories(
+        self, section: str, limit: int = 30, force_refresh: bool = False
+    ) -> List[Story]:
         """Fetch stories from a specific HN section.
 
         Args:
             section: HN section name ("top", "new", "ask", "show", "jobs")
             limit: Maximum number of stories to fetch (default: 30)
+            force_refresh: Bypass cached item details when fetching stories
 
         Returns:
             List of Story objects sorted by rank
@@ -103,9 +108,9 @@ class HNClient:
                 f"Invalid section '{section}'. Valid sections: {valid_sections}"
             )
 
+        endpoint = self.SECTION_ENDPOINTS[section]
+
         try:
-            # Fetch the list of story IDs for this section
-            endpoint = self.SECTION_ENDPOINTS[section]
             response = await self._http_client.get(endpoint)
             response.raise_for_status()
 
@@ -113,11 +118,12 @@ class HNClient:
             if not story_ids:
                 return []
 
-            # Limit the number of stories to fetch
+            self._save_section_story_ids(section, story_ids)
             story_ids = story_ids[:limit]
 
-            # Fetch story details concurrently
-            stories = await self._fetch_items_concurrent(story_ids)
+            stories = await self._fetch_items_concurrent(
+                story_ids, force_refresh=force_refresh
+            )
 
             # Filter to only Story objects and preserve order
             story_objects = []
@@ -132,17 +138,24 @@ class HNClient:
                 f"HTTP error fetching {section} stories: {e.response.status_code}"
             ) from e
         except httpx.RequestError as e:
+            logger.debug("Falling back to cached {} stories: {}", section, e)
+            cached_stories = self._get_cached_section_stories(section, limit)
+            if cached_stories:
+                return cached_stories
             raise HNClientError(f"Network error fetching {section} stories: {e}") from e
         except Exception as e:
             raise HNClientError(
                 f"Unexpected error fetching {section} stories: {e}"
             ) from e
 
-    async def fetch_item(self, item_id: int) -> Union[Story, Comment]:
+    async def fetch_item(
+        self, item_id: int, force_refresh: bool = False
+    ) -> Union[Story, Comment]:
         """Fetch a single item (story or comment) by ID.
 
         Args:
             item_id: HN item ID
+            force_refresh: Bypass the cache and fetch from the API
 
         Returns:
             Story or Comment object based on the item type
@@ -152,6 +165,12 @@ class HNClient:
         """
         if not self._http_client:
             raise HNClientError("Client not initialized. Use as async context manager.")
+
+        cached_item = self._get_cached_item(item_id)
+        if not force_refresh:
+            fresh_item = self._get_fresh_cached_item(item_id)
+            if fresh_item is not None:
+                return fresh_item
 
         try:
             response = await self._http_client.get(f"/item/{item_id}.json")
@@ -164,6 +183,7 @@ class HNClient:
             item = item_from_json(item_data)
             try:
                 self._cache_manager.save_item(item)
+                logger.debug("Saved item {} to cache", item_id)
             except Exception:
                 # A local cache problem must not turn a successful API fetch into
                 # a failed item load.
@@ -177,12 +197,19 @@ class HNClient:
                 f"HTTP error fetching item {item_id}: {e.response.status_code}"
             ) from e
         except httpx.RequestError as e:
+            if cached_item is not None:
+                logger.debug(
+                    "Serving stale cached item {} after network error", item_id
+                )
+                return cached_item
             raise HNClientError(f"Network error fetching item {item_id}: {e}") from e
+        except HNClientError:
+            raise
         except Exception as e:
             raise HNClientError(f"Unexpected error fetching item {item_id}: {e}") from e
 
     async def _fetch_items_concurrent(
-        self, item_ids: List[int]
+        self, item_ids: List[int], force_refresh: bool = False
     ) -> List[Union[Story, Comment]]:
         """Fetch multiple items concurrently.
 
@@ -196,7 +223,7 @@ class HNClient:
         async def fetch_single_item(item_id: int) -> Optional[Union[Story, Comment]]:
             """Fetch a single item, returning None if it fails."""
             try:
-                return await self.fetch_item(item_id)
+                return await self.fetch_item(item_id, force_refresh=force_refresh)
             except HNClientError:
                 # Log the error but don't fail the entire batch
                 return None
@@ -207,6 +234,46 @@ class HNClient:
 
         # Filter out None results while preserving order
         return [item for item in results if item is not None]
+
+    def _get_cached_item(self, item_id: int) -> Union[Story, Comment] | None:
+        try:
+            return self._cache_manager.get_item(item_id)
+        except Exception as exc:
+            logger.debug("Failed to read item {} from cache: {}", item_id, exc)
+            return None
+
+    def _get_fresh_cached_item(self, item_id: int) -> Union[Story, Comment] | None:
+        try:
+            item = self._cache_manager.get_fresh_item(item_id, self.CACHE_TTL_SECONDS)
+        except Exception as exc:
+            logger.debug("Failed to read fresh item {} from cache: {}", item_id, exc)
+            return None
+        if item is not None:
+            logger.debug("Serving item {} from cache", item_id)
+        return item
+
+    def _save_section_story_ids(self, section: str, story_ids: List[int]) -> None:
+        try:
+            self._cache_manager.save_story_ids(section, story_ids)
+            logger.debug("Saved {} story IDs for {} to cache", len(story_ids), section)
+        except Exception as exc:
+            logger.debug("Failed to cache story IDs for {}: {}", section, exc)
+
+    def _get_cached_section_stories(self, section: str, limit: int) -> List[Story]:
+        try:
+            story_ids = self._cache_manager.get_story_ids(section)[:limit]
+        except Exception as exc:
+            logger.debug("Failed to read cached story IDs for {}: {}", section, exc)
+            return []
+
+        stories: List[Story] = []
+        for story_id in story_ids:
+            item = self._get_cached_item(story_id)
+            if isinstance(item, Story):
+                stories.append(item)
+        if stories:
+            logger.debug("Serving {} cached {} stories", len(stories), section)
+        return stories
 
     async def search(self, query: str, limit: int = 30) -> List[Story]:
         """Search for stories using the Algolia Search API.
