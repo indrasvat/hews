@@ -372,7 +372,13 @@ class TestHNClient:
             await client.fetch_item(123)
 
         with pytest.raises(HNClientError, match="Client not initialized"):
-            await client.login("user", "password")
+            await client.login("testuser", "password")
+
+        with pytest.raises(HNClientError, match="Client not initialized"):
+            await client.upvote(123, is_comment=False)
+
+        with pytest.raises(HNClientError, match="Client not initialized"):
+            await client.post_comment(123, "hello")
 
     @pytest.mark.asyncio
     async def test_login_success_sets_authenticated(self, mock_client):
@@ -449,7 +455,43 @@ class TestHNClient:
         mock_client._http_client.get.return_value = login_page
 
         assert await mock_client.login("testuser", "secret") is False
+        assert mock_client.is_authenticated is False
         mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_refuses_missing_credentials(self, mock_client):
+        """Blank credentials are rejected before making a network request."""
+        mock_client._http_client.cookies = httpx.Cookies()
+
+        result = await mock_client.login(" ", "")
+
+        assert result is False
+        assert mock_client.is_authenticated is False
+        mock_client._http_client.get.assert_not_called()
+        mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_http_error_returns_false(self, mock_client):
+        """HTTP failures during login return False rather than raising."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
+        login_page.raise_for_status.return_value = None
+        mock_client._http_client.cookies = httpx.Cookies()
+        response = Mock()
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden", request=AsyncMock(), response=AsyncMock(status_code=403)
+        )
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.return_value = response
+
+        result = await mock_client.login("testuser", "secret")
+
+        assert result is False
+        assert mock_client.is_authenticated is False
 
     @pytest.mark.asyncio
     async def test_login_from_env_skips_incomplete_credentials(
@@ -520,6 +562,202 @@ class TestHNClient:
                 "pw": "secret",
             },
         )
+
+    @pytest.mark.asyncio
+    async def test_upvote_requires_authenticated_session(self, mock_client):
+        """Upvote returns False when the HN user cookie is absent."""
+        mock_client._http_client.cookies = httpx.Cookies()
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+        mock_client._http_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upvote_story_success(self, mock_client):
+        """A story upvote fetches the item page and follows the vote link."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = (
+            '<html><a id="up_123" '
+            'href="vote?id=123&amp;how=up&amp;auth=abc123&amp;goto=item?id=123">'
+            "upvote</a></html>"
+        )
+        item_response.raise_for_status.return_value = None
+        vote_response = Mock()
+        vote_response.raise_for_status.return_value = None
+        mock_client._http_client.get.side_effect = [item_response, vote_response]
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is True
+        assert mock_client._http_client.get.call_args_list[0].args == (
+            "https://news.ycombinator.com/item?id=123",
+        )
+        assert mock_client._http_client.get.call_args_list[1].args == (
+            "https://news.ycombinator.com/vote?id=123&how=up&auth=abc123&goto=item?id=123",
+        )
+
+    @pytest.mark.asyncio
+    async def test_upvote_comment_success(self, mock_client):
+        """A comment upvote finds the matching comment vote link on the page."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = (
+            '<a id="up_111" href="vote?id=111&amp;how=up&amp;auth=story"></a>'
+            '<a id="up_456" href="vote?id=456&amp;how=up&amp;auth=comment"></a>'
+        )
+        item_response.raise_for_status.return_value = None
+        vote_response = Mock()
+        vote_response.raise_for_status.return_value = None
+        mock_client._http_client.get.side_effect = [item_response, vote_response]
+
+        result = await mock_client.upvote(456, is_comment=True)
+
+        assert result is True
+        assert mock_client._http_client.get.call_args_list[1].args == (
+            "https://news.ycombinator.com/vote?id=456&how=up&auth=comment",
+        )
+
+    @pytest.mark.asyncio
+    async def test_upvote_missing_link_returns_false(self, mock_client):
+        """A page with no matching upvote link fails gracefully."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = '<a id="up_999" href="vote?id=999&how=up&auth=abc"></a>'
+        item_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = item_response
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+        mock_client._http_client.get.assert_called_once_with(
+            "https://news.ycombinator.com/item?id=123"
+        )
+
+    @pytest.mark.asyncio
+    async def test_upvote_http_error_returns_false(self, mock_client):
+        """HTTP failures during upvote return False rather than raising."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden", request=AsyncMock(), response=AsyncMock(status_code=403)
+        )
+        mock_client._http_client.get.return_value = item_response
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_post_comment_requires_authenticated_session(self, mock_client):
+        """Comment posting returns False when the HN user cookie is absent."""
+        mock_client._http_client.cookies = httpx.Cookies()
+
+        result = await mock_client.post_comment(123, "hello")
+
+        assert result is False
+        mock_client._http_client.get.assert_not_called()
+        mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_post_comment_refuses_empty_text(self, mock_client):
+        """Empty comments are rejected before fetching a form token."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+
+        result = await mock_client.post_comment(123, " \n ")
+
+        assert result is False
+        mock_client._http_client.get.assert_not_called()
+        mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_post_comment_success(self, mock_client):
+        """Comment posting fetches the item page and submits the parsed form."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = """
+            <form method="post" action="comment">
+                <input type="hidden" name="fnid" value="abc123">
+                <input type="hidden" name="goto" value="item?id=123">
+                <textarea name="text"></textarea>
+            </form>
+        """
+        item_response.raise_for_status.return_value = None
+        post_response = Mock()
+        post_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = item_response
+        mock_client._http_client.post.return_value = post_response
+
+        result = await mock_client.post_comment(123, "hello <i>HN</i>")
+
+        assert result is True
+        mock_client._http_client.get.assert_called_once_with(
+            "https://news.ycombinator.com/item?id=123"
+        )
+        mock_client._http_client.post.assert_called_once_with(
+            "https://news.ycombinator.com/comment",
+            data={
+                "fnid": "abc123",
+                "goto": "item?id=123",
+                "parent": "123",
+                "text": "hello <i>HN</i>",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_post_comment_missing_form_returns_false(self, mock_client):
+        """A page without a fnid-backed comment form fails gracefully."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = (
+            '<form action="comment"><input name="parent" value="123"></form>'
+        )
+        item_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = item_response
+
+        result = await mock_client.post_comment(123, "hello")
+
+        assert result is False
+        mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_post_comment_http_error_returns_false(self, mock_client):
+        """HTTP failures during comment posting return False rather than raising."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden", request=AsyncMock(), response=AsyncMock(status_code=403)
+        )
+        mock_client._http_client.get.return_value = item_response
+
+        result = await mock_client.post_comment(123, "hello")
+
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_section_aliases(self, mock_client):

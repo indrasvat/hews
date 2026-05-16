@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import datetime
 import os
+from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from loguru import logger
@@ -23,7 +25,7 @@ class _HiddenInputParser(HTMLParser):
     """Collect hidden values from the form that accepts HN credentials."""
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(convert_charrefs=True)
         self._current_form: tuple[Dict[str, str], set[str]] | None = None
         self.values: Dict[str, str] = {}
 
@@ -39,6 +41,7 @@ class _HiddenInputParser(HTMLParser):
 
         if tag != "input":
             return
+
         attr_map = {name: value or "" for name, value in attrs}
         name = attr_map.get("name")
         if not name or self._current_form is None:
@@ -61,6 +64,87 @@ class _HiddenInputParser(HTMLParser):
         ):
             self.values = hidden_values
         self._current_form = None
+
+
+class _HNUpvoteLinkParser(HTMLParser):
+    """Extract upvote links from Hacker News item HTML."""
+
+    def __init__(self, item_id: int) -> None:
+        super().__init__(convert_charrefs=True)
+        self.item_id = str(item_id)
+        self.upvote_href: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a" or self.upvote_href is not None:
+            return
+
+        attr_map = {name: value for name, value in attrs}
+        href = attr_map.get("href")
+        if href is None:
+            return
+
+        anchor_id = attr_map.get("id")
+        parsed = urlparse(unescape(href))
+        if not parsed.path.endswith("vote"):
+            return
+
+        query = parse_qs(parsed.query)
+        if (
+            anchor_id == f"up_{self.item_id}"
+            and query.get("id") == [self.item_id]
+            and query.get("how") == ["up"]
+            and query.get("auth")
+        ):
+            self.upvote_href = href
+
+
+class _HNCommentFormParser(HTMLParser):
+    """Extract the comment form action and fields from Hacker News item HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.action: str | None = None
+        self.fields: dict[str, str] | None = None
+        self._in_form = False
+        self._candidate_action: str | None = None
+        self._candidate_fields: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {name: value for name, value in attrs}
+
+        if tag == "form":
+            self._in_form = True
+            self._candidate_action = attr_map.get("action")
+            self._candidate_fields = {}
+            return
+
+        if not self._in_form or tag != "input":
+            return
+
+        name = attr_map.get("name")
+        if not name:
+            return
+
+        self._candidate_fields[name] = attr_map.get("value") or ""
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "form" or not self._in_form:
+            return
+
+        action = self._candidate_action or ""
+        parsed = urlparse(unescape(action))
+        is_comment_action = parsed.path.endswith("comment") or action == "comment"
+        if (
+            self.fields is None
+            and is_comment_action
+            and "fnid" in self._candidate_fields
+        ):
+            self.action = action
+            self.fields = dict(self._candidate_fields)
+
+        self._in_form = False
+        self._candidate_action = None
+        self._candidate_fields = {}
 
 
 class HNClient:
@@ -122,62 +206,6 @@ class HNClient:
             )
         return self
 
-    async def login(self, username: str, password: str) -> bool:
-        """Authenticate with Hacker News and keep the session cookie in memory.
-
-        Args:
-            username: Hacker News username.
-            password: Hacker News password.
-
-        Returns:
-            True when HN sets a session cookie, otherwise False.
-
-        Raises:
-            HNClientError: If the client has not been initialized.
-        """
-        if not self._http_client:
-            raise HNClientError("Client not initialized. Use as async context manager.")
-
-        if not username or not password:
-            return False
-
-        try:
-            login_url = f"{self.HN_WEB_BASE_URL}/login"
-            login_page = await self._http_client.get(login_url)
-            login_page.raise_for_status()
-
-            hidden_fields = self._parse_hidden_inputs(login_page.text)
-            fnid = hidden_fields.get("fnid")
-            if not fnid:
-                logger.debug("HN login form did not include fnid")
-                return False
-
-            form_data = {
-                **hidden_fields,
-                "acct": username,
-                "pw": password,
-                "goto": hidden_fields.get("goto", "news"),
-            }
-            response = await self._http_client.post(login_url, data=form_data)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            logger.debug("HN login request failed: {}", exc)
-            self.is_authenticated = False
-            return False
-
-        self.is_authenticated = self._has_hn_user_cookie()
-        if not self.is_authenticated:
-            logger.debug("HN login failed for user {}", username)
-        return self.is_authenticated
-
-    async def login_from_env(self) -> bool:
-        """Log in with HN_USERNAME/HN_PASSWORD when both are present."""
-        username = os.environ.get("HN_USERNAME")
-        password = os.environ.get("HN_PASSWORD")
-        if not username or not password:
-            return False
-        return await self.login(username, password)
-
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         if self._owned_client:
@@ -185,16 +213,6 @@ class HNClient:
                 await self._http_client.aclose()
             if self._algolia_client:
                 await self._algolia_client.aclose()
-
-    def _parse_hidden_inputs(self, html: str) -> Dict[str, str]:
-        parser = _HiddenInputParser()
-        parser.feed(html)
-        return parser.values
-
-    def _has_hn_user_cookie(self) -> bool:
-        if not self._http_client:
-            return False
-        return self._http_client.cookies.get("user") is not None
 
     async def fetch_stories(
         self, section: str, limit: int = 30, force_refresh: bool = False
@@ -348,6 +366,191 @@ class HNClient:
 
         # Filter out None results while preserving order
         return [item for item in results if item is not None]
+
+    async def login(self, username: str, password: str) -> bool:
+        """Authenticate with Hacker News and keep the session cookie in memory.
+
+        Args:
+            username: Hacker News username.
+            password: Hacker News password.
+
+        Returns:
+            True when HN sets a session cookie, otherwise False.
+
+        Raises:
+            HNClientError: If the client has not been initialized.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not username.strip() or not password:
+            self.is_authenticated = False
+            return False
+
+        try:
+            login_url = f"{self.HN_WEB_BASE_URL}/login"
+            login_page = await self._http_client.get(login_url)
+            login_page.raise_for_status()
+
+            hidden_fields = self._parse_hidden_inputs(login_page.text)
+            fnid = hidden_fields.get("fnid")
+            if not fnid:
+                logger.debug("HN login form did not include fnid")
+                self.is_authenticated = False
+                return False
+
+            form_data = {
+                **hidden_fields,
+                "acct": username,
+                "pw": password,
+                "goto": hidden_fields.get("goto", "news"),
+            }
+            response = await self._http_client.post(login_url, data=form_data)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.debug("HN login request failed: {}", exc)
+            self.is_authenticated = False
+            return False
+
+        self.is_authenticated = self._has_hn_user_cookie()
+        if not self.is_authenticated:
+            logger.debug("HN login failed for user {}", username)
+        return self.is_authenticated
+
+    async def login_from_env(self) -> bool:
+        """Log in with HN_USERNAME/HN_PASSWORD when both are present."""
+        username = os.environ.get("HN_USERNAME")
+        password = os.environ.get("HN_PASSWORD")
+        if not username or not password:
+            self.is_authenticated = False
+            return False
+        return await self.login(username, password)
+
+    async def upvote(self, item_id: int, is_comment: bool) -> bool:
+        """Upvote a Hacker News story or comment using the active web session.
+
+        Args:
+            item_id: HN story or comment ID to upvote.
+            is_comment: Whether the item is a comment. HN exposes story and
+                comment vote links on item pages with the same link shape; this
+                flag keeps the public API explicit for UI callers.
+
+        Returns:
+            True if the vote request completed successfully, otherwise False.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not self._has_hn_user_cookie():
+            logger.warning("Upvote requires an authenticated Hacker News session")
+            return False
+
+        item_url = f"{self.HN_WEB_BASE_URL}/item?id={item_id}"
+
+        try:
+            item_response = await self._http_client.get(item_url)
+            item_response.raise_for_status()
+
+            upvote_url = self._extract_upvote_url(item_response.text, item_id)
+            if upvote_url is None:
+                logger.warning(
+                    "No upvote link found for {} {}",
+                    "comment" if is_comment else "story",
+                    item_id,
+                )
+                return False
+
+            vote_response = await self._http_client.get(upvote_url)
+            vote_response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "HTTP error while upvoting item {}: {}",
+                item_id,
+                exc.response.status_code,
+            )
+            return False
+        except httpx.RequestError:
+            logger.warning("Network error while upvoting item {}", item_id)
+            return False
+
+    async def post_comment(self, parent_id: int, text: str) -> bool:
+        """Post a comment or reply using the active Hacker News web session.
+
+        Args:
+            parent_id: HN story or comment ID to comment on.
+            text: Comment body to submit. HN handles supported formatting.
+
+        Returns:
+            True if the submit request completed successfully, otherwise False.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not self._has_hn_user_cookie():
+            logger.warning("Commenting requires an authenticated Hacker News session")
+            return False
+
+        if not text.strip():
+            logger.warning("Refusing to post an empty Hacker News comment")
+            return False
+
+        item_url = f"{self.HN_WEB_BASE_URL}/item?id={parent_id}"
+
+        try:
+            item_response = await self._http_client.get(item_url)
+            item_response.raise_for_status()
+
+            form_action, form_fields = self._extract_comment_form(item_response.text)
+            if form_action is None or form_fields is None:
+                logger.warning("No comment form found for parent item {}", parent_id)
+                return False
+
+            post_url = urljoin(self.HN_WEB_BASE_URL, unescape(form_action))
+            post_data = {**form_fields, "parent": str(parent_id), "text": text}
+            post_response = await self._http_client.post(post_url, data=post_data)
+            post_response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "HTTP error while posting comment to item {}: {}",
+                parent_id,
+                exc.response.status_code,
+            )
+            return False
+        except httpx.RequestError:
+            logger.warning("Network error while posting comment to item {}", parent_id)
+            return False
+
+    def _has_hn_user_cookie(self) -> bool:
+        if not self._http_client:
+            return False
+
+        try:
+            return self._http_client.cookies.get("user") is not None
+        except (AttributeError, KeyError, ValueError):
+            return False
+
+    def _parse_hidden_inputs(self, html: str) -> Dict[str, str]:
+        parser = _HiddenInputParser()
+        parser.feed(html)
+        return parser.values
+
+    def _extract_upvote_url(self, html: str, item_id: int) -> str | None:
+        parser = _HNUpvoteLinkParser(item_id)
+        parser.feed(html)
+        if parser.upvote_href is None:
+            return None
+        return urljoin(self.HN_WEB_BASE_URL, unescape(parser.upvote_href))
+
+    def _extract_comment_form(
+        self, html: str
+    ) -> tuple[str, dict[str, str]] | tuple[None, None]:
+        parser = _HNCommentFormParser()
+        parser.feed(html)
+        if parser.action is None or parser.fields is None:
+            return None, None
+        return parser.action, parser.fields
 
     def _get_cached_item(self, item_id: int) -> Union[Story, Comment] | None:
         try:
