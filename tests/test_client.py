@@ -371,6 +371,107 @@ class TestHNClient:
         with pytest.raises(HNClientError, match="Client not initialized"):
             await client.fetch_item(123)
 
+        with pytest.raises(HNClientError, match="Client not initialized"):
+            await client.upvote(123, is_comment=False)
+
+    @pytest.mark.asyncio
+    async def test_upvote_requires_authenticated_session(self, mock_client):
+        """Upvote returns False when the HN user cookie is absent."""
+        mock_client._http_client.cookies = httpx.Cookies()
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+        mock_client._http_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upvote_story_success(self, mock_client):
+        """A story upvote fetches the item page and follows the vote link."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = (
+            '<html><a id="up_123" '
+            'href="vote?id=123&amp;how=up&amp;auth=abc123&amp;goto=item?id=123">'
+            "upvote</a></html>"
+        )
+        item_response.raise_for_status.return_value = None
+        vote_response = Mock()
+        vote_response.raise_for_status.return_value = None
+        mock_client._http_client.get.side_effect = [item_response, vote_response]
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is True
+        assert mock_client._http_client.get.call_args_list[0].args == (
+            "https://news.ycombinator.com/item?id=123",
+        )
+        assert mock_client._http_client.get.call_args_list[1].args == (
+            "https://news.ycombinator.com/vote?id=123&how=up&auth=abc123&goto=item?id=123",
+        )
+
+    @pytest.mark.asyncio
+    async def test_upvote_comment_success(self, mock_client):
+        """A comment upvote finds the matching comment vote link on the page."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = (
+            '<a id="up_111" href="vote?id=111&amp;how=up&amp;auth=story"></a>'
+            '<a id="up_456" href="vote?id=456&amp;how=up&amp;auth=comment"></a>'
+        )
+        item_response.raise_for_status.return_value = None
+        vote_response = Mock()
+        vote_response.raise_for_status.return_value = None
+        mock_client._http_client.get.side_effect = [item_response, vote_response]
+
+        result = await mock_client.upvote(456, is_comment=True)
+
+        assert result is True
+        assert mock_client._http_client.get.call_args_list[1].args == (
+            "https://news.ycombinator.com/vote?id=456&how=up&auth=comment",
+        )
+
+    @pytest.mark.asyncio
+    async def test_upvote_missing_link_returns_false(self, mock_client):
+        """A page with no matching upvote link fails gracefully."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.text = '<a id="up_999" href="vote?id=999&how=up&auth=abc"></a>'
+        item_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = item_response
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+        mock_client._http_client.get.assert_called_once_with(
+            "https://news.ycombinator.com/item?id=123"
+        )
+
+    @pytest.mark.asyncio
+    async def test_upvote_http_error_returns_false(self, mock_client):
+        """HTTP failures during upvote return False rather than raising."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        item_response = Mock()
+        item_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden", request=AsyncMock(), response=AsyncMock(status_code=403)
+        )
+        mock_client._http_client.get.return_value = item_response
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+
     @pytest.mark.asyncio
     async def test_section_aliases(self, mock_client):
         """Test that section aliases work correctly."""
