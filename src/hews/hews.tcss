@@ -1,0 +1,15 @@
+Screen {
+    layout: vertical;
+}
+
+#status {
+    dock: top;
+    padding: 0 1;
+    height: 1;
+    background: $surface;
+    color: $text;
+}
+
+#stories {
+    height: 1fr;
+}
