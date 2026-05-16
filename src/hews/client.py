@@ -320,6 +320,45 @@ class HNClient:
         # Filter out None results while preserving order
         return [item for item in results if item is not None]
 
+    async def login(self, username: str, password: str) -> bool:
+        """Authenticate with Hacker News using the active web session.
+
+        Args:
+            username: Hacker News username.
+            password: Hacker News password.
+
+        Returns:
+            True if Hacker News sets a user session cookie, otherwise False.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not username.strip() or not password:
+            logger.warning("Hacker News login requires a username and password")
+            return False
+
+        try:
+            response = await self._http_client.post(
+                f"{self.HN_WEB_BASE_URL}/login",
+                data={"acct": username, "pw": password, "goto": "news"},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "HTTP error during Hacker News login: {}",
+                exc.response.status_code,
+            )
+            return False
+        except httpx.RequestError:
+            logger.warning("Network error during Hacker News login")
+            return False
+
+        if not self._has_hn_user_cookie():
+            logger.warning("Hacker News login did not create an authenticated session")
+            return False
+
+        return True
+
     async def upvote(self, item_id: int, is_comment: bool) -> bool:
         """Upvote a Hacker News story or comment using the active web session.
 

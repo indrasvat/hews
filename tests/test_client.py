@@ -372,10 +372,72 @@ class TestHNClient:
             await client.fetch_item(123)
 
         with pytest.raises(HNClientError, match="Client not initialized"):
+            await client.login("testuser", "password")
+
+        with pytest.raises(HNClientError, match="Client not initialized"):
             await client.upvote(123, is_comment=False)
 
         with pytest.raises(HNClientError, match="Client not initialized"):
             await client.post_comment(123, "hello")
+
+    @pytest.mark.asyncio
+    async def test_login_success(self, mock_client):
+        """Login posts HN credentials and succeeds when a user cookie is set."""
+        mock_client._http_client.cookies = httpx.Cookies()
+
+        async def post_login(*args, **kwargs):
+            mock_client._http_client.cookies.set(
+                "user", "testuser&hash", domain="news.ycombinator.com"
+            )
+            response = Mock()
+            response.raise_for_status.return_value = None
+            return response
+
+        mock_client._http_client.post.side_effect = post_login
+
+        result = await mock_client.login("testuser", "secret")
+
+        assert result is True
+        mock_client._http_client.post.assert_called_once_with(
+            "https://news.ycombinator.com/login",
+            data={"acct": "testuser", "pw": "secret", "goto": "news"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_login_returns_false_without_user_cookie(self, mock_client):
+        """Login fails gracefully when HN does not set a session cookie."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        response = Mock()
+        response.raise_for_status.return_value = None
+        mock_client._http_client.post.return_value = response
+
+        result = await mock_client.login("testuser", "wrong")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_login_refuses_missing_credentials(self, mock_client):
+        """Blank credentials are rejected before making a network request."""
+        mock_client._http_client.cookies = httpx.Cookies()
+
+        result = await mock_client.login(" ", "")
+
+        assert result is False
+        mock_client._http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_http_error_returns_false(self, mock_client):
+        """HTTP failures during login return False rather than raising."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        response = Mock()
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden", request=AsyncMock(), response=AsyncMock(status_code=403)
+        )
+        mock_client._http_client.post.return_value = response
+
+        result = await mock_client.login("testuser", "secret")
+
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_upvote_requires_authenticated_session(self, mock_client):
