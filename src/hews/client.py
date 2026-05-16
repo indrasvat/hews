@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from html import unescape
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from loguru import logger
@@ -17,6 +20,38 @@ class HNClientError(Exception):
     """Base exception for HNClient errors."""
 
 
+class _HNUpvoteLinkParser(HTMLParser):
+    """Extract upvote links from Hacker News item HTML."""
+
+    def __init__(self, item_id: int) -> None:
+        super().__init__(convert_charrefs=True)
+        self.item_id = str(item_id)
+        self.upvote_href: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a" or self.upvote_href is not None:
+            return
+
+        attr_map = {name: value for name, value in attrs}
+        href = attr_map.get("href")
+        if href is None:
+            return
+
+        anchor_id = attr_map.get("id")
+        parsed = urlparse(unescape(href))
+        if not parsed.path.endswith("vote"):
+            return
+
+        query = parse_qs(parsed.query)
+        if (
+            anchor_id == f"up_{self.item_id}"
+            and query.get("id") == [self.item_id]
+            and query.get("how") == ["up"]
+            and query.get("auth")
+        ):
+            self.upvote_href = href
+
+
 class HNClient:
     """Asynchronous client for fetching data from the Hacker News API.
 
@@ -27,6 +62,7 @@ class HNClient:
 
     BASE_URL = "https://hacker-news.firebaseio.com/v0"
     ALGOLIA_BASE_URL = "https://hn.algolia.com/api/v1"
+    HN_WEB_BASE_URL = "https://news.ycombinator.com"
     CACHE_TTL_SECONDS = 30 * 60
 
     # HN API endpoints for different story sections
@@ -234,6 +270,70 @@ class HNClient:
 
         # Filter out None results while preserving order
         return [item for item in results if item is not None]
+
+    async def upvote(self, item_id: int, is_comment: bool) -> bool:
+        """Upvote a Hacker News story or comment using the active web session.
+
+        Args:
+            item_id: HN story or comment ID to upvote.
+            is_comment: Whether the item is a comment. HN exposes story and
+                comment vote links on item pages with the same link shape; this
+                flag keeps the public API explicit for UI callers.
+
+        Returns:
+            True if the vote request completed successfully, otherwise False.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not self._has_hn_user_cookie():
+            logger.warning("Upvote requires an authenticated Hacker News session")
+            return False
+
+        item_url = f"{self.HN_WEB_BASE_URL}/item?id={item_id}"
+
+        try:
+            item_response = await self._http_client.get(item_url)
+            item_response.raise_for_status()
+
+            upvote_url = self._extract_upvote_url(item_response.text, item_id)
+            if upvote_url is None:
+                logger.warning(
+                    "No upvote link found for {} {}",
+                    "comment" if is_comment else "story",
+                    item_id,
+                )
+                return False
+
+            vote_response = await self._http_client.get(upvote_url)
+            vote_response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "HTTP error while upvoting item {}: {}",
+                item_id,
+                exc.response.status_code,
+            )
+            return False
+        except httpx.RequestError:
+            logger.warning("Network error while upvoting item {}", item_id)
+            return False
+
+    def _has_hn_user_cookie(self) -> bool:
+        if not self._http_client:
+            return False
+
+        try:
+            return self._http_client.cookies.get("user") is not None
+        except (AttributeError, KeyError, ValueError):
+            return False
+
+    def _extract_upvote_url(self, html: str, item_id: int) -> str | None:
+        parser = _HNUpvoteLinkParser(item_id)
+        parser.feed(html)
+        if parser.upvote_href is None:
+            return None
+        return urljoin(self.HN_WEB_BASE_URL, unescape(parser.upvote_href))
 
     def _get_cached_item(self, item_id: int) -> Union[Story, Comment] | None:
         try:
