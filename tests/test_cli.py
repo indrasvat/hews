@@ -148,6 +148,23 @@ def test_cli_section_print_success(runner, mock_stories):
         mock_client.fetch_stories.assert_called_once_with("top", limit=30)
 
 
+def test_cli_print_mode_attempts_env_login(runner, mock_stories, monkeypatch):
+    """Print mode authenticates the shared client before fetching stories."""
+    monkeypatch.setenv("HN_USERNAME", "testuser")
+    monkeypatch.setenv("HN_PASSWORD", "secret")
+    with patch("hews.cli.HNClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.login_from_env = AsyncMock(return_value=True)
+        mock_client.fetch_stories = AsyncMock(return_value=mock_stories)
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        result = runner.invoke(cli, ["--section", "top", "--print"])
+
+    assert result.exit_code == 0
+    mock_client.login_from_env.assert_awaited_once_with()
+    mock_client.fetch_stories.assert_called_once_with("top", limit=30)
+
+
 def test_cli_section_print_empty_results(runner):
     """Test handling of empty story results."""
     with patch("hews.cli.HNClient") as mock_client_class:

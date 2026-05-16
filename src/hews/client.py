@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Union
@@ -18,6 +19,51 @@ from .models import Comment, Story, ItemType, item_from_json
 
 class HNClientError(Exception):
     """Base exception for HNClient errors."""
+
+
+class _HiddenInputParser(HTMLParser):
+    """Collect hidden values from the form that accepts HN credentials."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._current_form: tuple[Dict[str, str], set[str]] | None = None
+        self.values: Dict[str, str] = {}
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "form":
+            self._current_form = ({}, set())
+            return
+
+        if tag != "input":
+            return
+
+        attr_map = {name: value or "" for name, value in attrs}
+        name = attr_map.get("name")
+        if not name or self._current_form is None:
+            return
+
+        hidden_values, input_names = self._current_form
+        input_names.add(name)
+        if attr_map.get("type") == "hidden":
+            hidden_values[name] = attr_map.get("value", "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "form" or self._current_form is None:
+            return
+
+        hidden_values, input_names = self._current_form
+        if (
+            {"acct", "pw"}.issubset(input_names)
+            and "creating" not in hidden_values
+            and not self.values
+        ):
+            self.values = hidden_values
+        self._current_form = None
 
 
 class _HNUpvoteLinkParser(HTMLParser):
@@ -142,6 +188,7 @@ class HNClient:
         self._algolia_client: Optional[httpx.AsyncClient] = None
         self._owned_client = http_client is None
         self._cache_manager = cache_manager or CacheManager()
+        self.is_authenticated = False
 
     async def __aenter__(self) -> "HNClient":
         """Async context manager entry."""
@@ -321,43 +368,63 @@ class HNClient:
         return [item for item in results if item is not None]
 
     async def login(self, username: str, password: str) -> bool:
-        """Authenticate with Hacker News using the active web session.
+        """Authenticate with Hacker News and keep the session cookie in memory.
 
         Args:
             username: Hacker News username.
             password: Hacker News password.
 
         Returns:
-            True if Hacker News sets a user session cookie, otherwise False.
+            True when HN sets a session cookie, otherwise False.
+
+        Raises:
+            HNClientError: If the client has not been initialized.
         """
         if not self._http_client:
             raise HNClientError("Client not initialized. Use as async context manager.")
 
         if not username.strip() or not password:
-            logger.warning("Hacker News login requires a username and password")
+            self.is_authenticated = False
             return False
 
         try:
-            response = await self._http_client.post(
-                f"{self.HN_WEB_BASE_URL}/login",
-                data={"acct": username, "pw": password, "goto": "news"},
-            )
+            login_url = f"{self.HN_WEB_BASE_URL}/login"
+            login_page = await self._http_client.get(login_url)
+            login_page.raise_for_status()
+
+            hidden_fields = self._parse_hidden_inputs(login_page.text)
+            fnid = hidden_fields.get("fnid")
+            if not fnid:
+                logger.debug("HN login form did not include fnid")
+                self.is_authenticated = False
+                return False
+
+            form_data = {
+                **hidden_fields,
+                "acct": username,
+                "pw": password,
+                "goto": hidden_fields.get("goto", "news"),
+            }
+            response = await self._http_client.post(login_url, data=form_data)
             response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            logger.warning(
-                "HTTP error during Hacker News login: {}",
-                exc.response.status_code,
-            )
-            return False
-        except httpx.RequestError:
-            logger.warning("Network error during Hacker News login")
+        except httpx.HTTPError as exc:
+            logger.debug("HN login request failed: {}", exc)
+            self.is_authenticated = False
             return False
 
-        if not self._has_hn_user_cookie():
-            logger.warning("Hacker News login did not create an authenticated session")
-            return False
+        self.is_authenticated = self._has_hn_user_cookie()
+        if not self.is_authenticated:
+            logger.debug("HN login failed for user {}", username)
+        return self.is_authenticated
 
-        return True
+    async def login_from_env(self) -> bool:
+        """Log in with HN_USERNAME/HN_PASSWORD when both are present."""
+        username = os.environ.get("HN_USERNAME")
+        password = os.environ.get("HN_PASSWORD")
+        if not username or not password:
+            self.is_authenticated = False
+            return False
+        return await self.login(username, password)
 
     async def upvote(self, item_id: int, is_comment: bool) -> bool:
         """Upvote a Hacker News story or comment using the active web session.
@@ -463,6 +530,11 @@ class HNClient:
             return self._http_client.cookies.get("user") is not None
         except (AttributeError, KeyError, ValueError):
             return False
+
+    def _parse_hidden_inputs(self, html: str) -> Dict[str, str]:
+        parser = _HiddenInputParser()
+        parser.feed(html)
+        return parser.values
 
     def _extract_upvote_url(self, html: str, item_id: int) -> str | None:
         parser = _HNUpvoteLinkParser(item_id)

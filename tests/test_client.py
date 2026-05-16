@@ -381,39 +381,82 @@ class TestHNClient:
             await client.post_comment(123, "hello")
 
     @pytest.mark.asyncio
-    async def test_login_success(self, mock_client):
-        """Login posts HN credentials and succeeds when a user cookie is set."""
-        mock_client._http_client.cookies = httpx.Cookies()
+    async def test_login_success_sets_authenticated(self, mock_client):
+        """Successful HN login keeps the user cookie on the shared client."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="hidden" name="goto" value="news">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
+        login_page.raise_for_status.return_value = None
+
+        login_response = Mock()
+        login_response.raise_for_status.return_value = None
 
         async def post_login(*args, **kwargs):
             mock_client._http_client.cookies.set(
-                "user", "testuser&hash", domain="news.ycombinator.com"
+                "user", "testuser&session", domain="news.ycombinator.com"
             )
-            response = Mock()
-            response.raise_for_status.return_value = None
-            return response
+            return login_response
 
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
         mock_client._http_client.post.side_effect = post_login
 
-        result = await mock_client.login("testuser", "secret")
-
-        assert result is True
+        assert await mock_client.login("testuser", "secret") is True
+        assert mock_client.is_authenticated is True
+        assert mock_client._http_client.cookies.get("user") == "testuser&session"
+        mock_client._http_client.get.assert_called_once_with(
+            "https://news.ycombinator.com/login"
+        )
         mock_client._http_client.post.assert_called_once_with(
             "https://news.ycombinator.com/login",
-            data={"acct": "testuser", "pw": "secret", "goto": "news"},
+            data={
+                "fnid": "abc123",
+                "goto": "news",
+                "acct": "testuser",
+                "pw": "secret",
+            },
         )
 
     @pytest.mark.asyncio
-    async def test_login_returns_false_without_user_cookie(self, mock_client):
-        """Login fails gracefully when HN does not set a session cookie."""
+    async def test_login_failure_without_cookie_returns_false(self, mock_client):
+        """HN login failure is represented as False without raising."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
+        login_page.raise_for_status.return_value = None
+        login_response = Mock()
+        login_response.raise_for_status.return_value = None
+
         mock_client._http_client.cookies = httpx.Cookies()
-        response = Mock()
-        response.raise_for_status.return_value = None
-        mock_client._http_client.post.return_value = response
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.return_value = login_response
 
-        result = await mock_client.login("testuser", "wrong")
+        assert await mock_client.login("testuser", "bad-secret") is False
+        assert mock_client.is_authenticated is False
 
-        assert result is False
+    @pytest.mark.asyncio
+    async def test_login_missing_fnid_returns_false(self, mock_client):
+        """A changed login form fails gracefully."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
+        login_page.raise_for_status.return_value = None
+
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+
+        assert await mock_client.login("testuser", "secret") is False
+        assert mock_client.is_authenticated is False
+        mock_client._http_client.post.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_login_refuses_missing_credentials(self, mock_client):
@@ -423,21 +466,102 @@ class TestHNClient:
         result = await mock_client.login(" ", "")
 
         assert result is False
+        assert mock_client.is_authenticated is False
+        mock_client._http_client.get.assert_not_called()
         mock_client._http_client.post.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_login_http_error_returns_false(self, mock_client):
         """HTTP failures during login return False rather than raising."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
+        login_page.raise_for_status.return_value = None
         mock_client._http_client.cookies = httpx.Cookies()
         response = Mock()
         response.raise_for_status.side_effect = httpx.HTTPStatusError(
             "Forbidden", request=AsyncMock(), response=AsyncMock(status_code=403)
         )
+        mock_client._http_client.get.return_value = login_page
         mock_client._http_client.post.return_value = response
 
         result = await mock_client.login("testuser", "secret")
 
         assert result is False
+        assert mock_client.is_authenticated is False
+
+    @pytest.mark.asyncio
+    async def test_login_from_env_skips_incomplete_credentials(
+        self, mock_client, monkeypatch
+    ):
+        """Missing env credentials leave the client in read-only mode."""
+        monkeypatch.delenv("HN_USERNAME", raising=False)
+        monkeypatch.setenv("HN_PASSWORD", "secret")
+        mock_client.login = AsyncMock(return_value=True)
+
+        assert await mock_client.login_from_env() is False
+        mock_client.login.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_login_does_not_log_password(self, mock_client, capsys):
+        """Failed login logging must not expose the password."""
+        login_page = Mock()
+        login_page.text = (
+            '<form><input type="hidden" name="fnid" value="abc123">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw"></form>'
+        )
+        login_page.raise_for_status.return_value = None
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.side_effect = httpx.RequestError(
+            "Connection failed"
+        )
+
+        assert await mock_client.login("testuser", "top-secret-password") is False
+        output = capsys.readouterr()
+        assert "top-secret-password" not in output.err
+        assert "top-secret-password" not in output.out
+
+    @pytest.mark.asyncio
+    async def test_login_ignores_signup_hidden_fields(self, mock_client):
+        """Login must not include hidden inputs from HN's create-account form."""
+        login_page = Mock()
+        login_page.text = (
+            '<form action="login">'
+            '<input type="hidden" name="fnid" value="login-token">'
+            '<input type="hidden" name="goto" value="news">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw">'
+            "</form>"
+            '<form action="login">'
+            '<input type="hidden" name="fnid" value="signup-token">'
+            '<input type="hidden" name="creating" value="t">'
+            '<input type="text" name="acct">'
+            '<input type="password" name="pw">'
+            "</form>"
+        )
+        login_page.raise_for_status.return_value = None
+        login_response = Mock()
+        login_response.raise_for_status.return_value = None
+
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.get.return_value = login_page
+        mock_client._http_client.post.return_value = login_response
+
+        assert await mock_client.login("testuser", "secret") is False
+        mock_client._http_client.post.assert_called_once_with(
+            "https://news.ycombinator.com/login",
+            data={
+                "fnid": "login-token",
+                "goto": "news",
+                "acct": "testuser",
+                "pw": "secret",
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_upvote_requires_authenticated_session(self, mock_client):
