@@ -52,6 +52,55 @@ class _HNUpvoteLinkParser(HTMLParser):
             self.upvote_href = href
 
 
+class _HNCommentFormParser(HTMLParser):
+    """Extract the comment form action and fields from Hacker News item HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.action: str | None = None
+        self.fields: dict[str, str] | None = None
+        self._in_form = False
+        self._candidate_action: str | None = None
+        self._candidate_fields: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {name: value for name, value in attrs}
+
+        if tag == "form":
+            self._in_form = True
+            self._candidate_action = attr_map.get("action")
+            self._candidate_fields = {}
+            return
+
+        if not self._in_form or tag != "input":
+            return
+
+        name = attr_map.get("name")
+        if not name:
+            return
+
+        self._candidate_fields[name] = attr_map.get("value") or ""
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "form" or not self._in_form:
+            return
+
+        action = self._candidate_action or ""
+        parsed = urlparse(unescape(action))
+        is_comment_action = parsed.path.endswith("comment") or action == "comment"
+        if (
+            self.fields is None
+            and is_comment_action
+            and "fnid" in self._candidate_fields
+        ):
+            self.action = action
+            self.fields = dict(self._candidate_fields)
+
+        self._in_form = False
+        self._candidate_action = None
+        self._candidate_fields = {}
+
+
 class HNClient:
     """Asynchronous client for fetching data from the Hacker News API.
 
@@ -319,6 +368,54 @@ class HNClient:
             logger.warning("Network error while upvoting item {}", item_id)
             return False
 
+    async def post_comment(self, parent_id: int, text: str) -> bool:
+        """Post a comment or reply using the active Hacker News web session.
+
+        Args:
+            parent_id: HN story or comment ID to comment on.
+            text: Comment body to submit. HN handles supported formatting.
+
+        Returns:
+            True if the submit request completed successfully, otherwise False.
+        """
+        if not self._http_client:
+            raise HNClientError("Client not initialized. Use as async context manager.")
+
+        if not self._has_hn_user_cookie():
+            logger.warning("Commenting requires an authenticated Hacker News session")
+            return False
+
+        if not text.strip():
+            logger.warning("Refusing to post an empty Hacker News comment")
+            return False
+
+        item_url = f"{self.HN_WEB_BASE_URL}/item?id={parent_id}"
+
+        try:
+            item_response = await self._http_client.get(item_url)
+            item_response.raise_for_status()
+
+            form_action, form_fields = self._extract_comment_form(item_response.text)
+            if form_action is None or form_fields is None:
+                logger.warning("No comment form found for parent item {}", parent_id)
+                return False
+
+            post_url = urljoin(self.HN_WEB_BASE_URL, unescape(form_action))
+            post_data = {**form_fields, "parent": str(parent_id), "text": text}
+            post_response = await self._http_client.post(post_url, data=post_data)
+            post_response.raise_for_status()
+            return True
+        except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "HTTP error while posting comment to item {}: {}",
+                parent_id,
+                exc.response.status_code,
+            )
+            return False
+        except httpx.RequestError:
+            logger.warning("Network error while posting comment to item {}", parent_id)
+            return False
+
     def _has_hn_user_cookie(self) -> bool:
         if not self._http_client:
             return False
@@ -334,6 +431,15 @@ class HNClient:
         if parser.upvote_href is None:
             return None
         return urljoin(self.HN_WEB_BASE_URL, unescape(parser.upvote_href))
+
+    def _extract_comment_form(
+        self, html: str
+    ) -> tuple[str, dict[str, str]] | tuple[None, None]:
+        parser = _HNCommentFormParser()
+        parser.feed(html)
+        if parser.action is None or parser.fields is None:
+            return None, None
+        return parser.action, parser.fields
 
     def _get_cached_item(self, item_id: int) -> Union[Story, Comment] | None:
         try:
