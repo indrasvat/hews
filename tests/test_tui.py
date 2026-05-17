@@ -6,10 +6,10 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from textual.widgets import DataTable, Static
+from textual.widgets import ListView, Static
 
 from hews.models import ItemType, Story
-from hews.tui import HewsApp, StoryListScreen
+from hews.tui import CommentsScreen, HewsApp, StoryListItem, StoryListScreen
 
 
 @pytest.fixture
@@ -20,6 +20,7 @@ def tui_stories() -> list[Story]:
             id=1,
             type=ItemType.STORY,
             title="Visible Story",
+            url="https://example.com/visible",
             score=42,
             descendants=7,
             by="hnuser",
@@ -49,9 +50,10 @@ async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> N
         assert screen.search_query is None
 
         status = screen.query_one("#status", Static)
-        table = screen.query_one("#stories", DataTable)
+        list_view = screen.query_one("#stories", ListView)
         assert str(status.renderable) == "Top stories"
-        assert table.row_count == 1
+        assert len(list_view.children) == 1
+        assert list_view.index == 0
 
         fake_client.fetch_stories.assert_awaited_once_with(
             "top",
@@ -61,6 +63,24 @@ async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> N
         fake_client.search.assert_not_called()
 
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_story_list_item_displays_title_domain_and_metadata() -> None:
+    """Story rows include rank, compact domain, and useful metadata."""
+    story = Story(
+        id=2,
+        type=ItemType.STORY,
+        title="Domain Story",
+        url="https://www.example.org/path",
+        score=13,
+        descendants=4,
+        by="alice",
+    )
+    item = StoryListItem(story, rank=3)
+
+    assert item._title_text() == "3. Domain Story (example.org)"
+    assert "13 points by alice | 4 comments" in item._metadata_text()
 
 
 @pytest.mark.asyncio
@@ -160,10 +180,10 @@ async def test_tui_refresh_error_clears_stale_story_state(
         await pilot.press("r")
         await pilot.pause()
 
-        table = screen.query_one("#stories", DataTable)
+        list_view = screen.query_one("#stories", ListView)
         status = screen.query_one("#status", Static)
         assert screen.stories == []
-        assert table.row_count == 0
+        assert len(list_view.children) == 0
         assert str(status.renderable) == "Error loading stories: offline"
 
 
@@ -178,6 +198,139 @@ async def test_tui_help_binding_notifies_user(fake_client: AsyncMock) -> None:
             await pilot.pause()
 
     notify.assert_called_once_with("Help overlay coming soon.", title="Hews")
+
+
+@pytest.mark.asyncio
+async def test_story_list_j_and_k_move_selection(fake_client: AsyncMock) -> None:
+    """Vim-style movement keys move through the story list."""
+    fake_client.fetch_stories.return_value = [
+        Story(id=1, type=ItemType.STORY, title="First"),
+        Story(id=2, type=ItemType.STORY, title="Second"),
+    ]
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        list_view = screen.query_one("#stories", ListView)
+        assert list_view.index == 0
+
+        await pilot.press("j")
+        assert list_view.index == 1
+        await pilot.press("k")
+        assert list_view.index == 0
+
+
+@pytest.mark.asyncio
+async def test_story_list_arrow_keys_move_selection(fake_client: AsyncMock) -> None:
+    """Arrow keys retain native ListView navigation."""
+    fake_client.fetch_stories.return_value = [
+        Story(id=1, type=ItemType.STORY, title="First"),
+        Story(id=2, type=ItemType.STORY, title="Second"),
+    ]
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        list_view = screen.query_one("#stories", ListView)
+
+        await pilot.press("down")
+        assert list_view.index == 1
+        await pilot.press("up")
+        assert list_view.index == 0
+
+
+@pytest.mark.asyncio
+async def test_story_list_section_shortcut_loads_new_section(
+    fake_client: AsyncMock,
+) -> None:
+    """Section shortcuts reload the same screen with the requested section."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert screen.section == "ask"
+        assert screen.search_query is None
+
+    assert fake_client.fetch_stories.await_args_list[-1].args == ("ask",)
+    assert fake_client.fetch_stories.await_args_list[-1].kwargs["force_refresh"] is False
+
+
+@pytest.mark.asyncio
+async def test_story_list_jobs_shortcut_uses_shift_j(fake_client: AsyncMock) -> None:
+    """Jobs section is reachable without stealing j from down navigation."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert screen.section == "jobs"
+
+    assert fake_client.fetch_stories.await_args_list[-1].args == ("jobs",)
+
+
+@pytest.mark.asyncio
+async def test_story_list_enter_opens_comments_placeholder(
+    fake_client: AsyncMock,
+) -> None:
+    """Enter opens the selected story in the placeholder comments screen."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CommentsScreen)
+        assert app.screen.story.title == "Visible Story"
+
+
+@pytest.mark.asyncio
+async def test_story_list_right_opens_comments_placeholder(
+    fake_client: AsyncMock,
+) -> None:
+    """Right arrow opens the selected story."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        await pilot.press("right")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CommentsScreen)
+
+
+@pytest.mark.asyncio
+async def test_story_list_empty_open_notifies(fake_client: AsyncMock) -> None:
+    """Opening an empty list is handled gracefully."""
+    fake_client.fetch_stories.return_value = []
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        with patch.object(app, "notify") as notify:
+            await pilot.press("enter")
+            await pilot.pause()
+
+    notify.assert_called_once_with("No story selected.", title="Hews")
+
+
+@pytest.mark.asyncio
+async def test_story_list_search_binding_notifies_user(fake_client: AsyncMock) -> None:
+    """The search trigger is wired for the future search UI task."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        with patch.object(app, "notify") as notify:
+            await pilot.press("/")
+            await pilot.pause()
+
+    notify.assert_called_once_with("Search UI coming soon.", title="Hews")
 
 
 @pytest.mark.asyncio

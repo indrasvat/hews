@@ -13,3 +13,38 @@ Screen {
 #stories {
     height: 1fr;
 }
+
+StoryListItem {
+    height: auto;
+    min-height: 3;
+    padding: 0 1;
+}
+
+StoryListItem > .story-title {
+    text-style: bold;
+    color: $accent;
+}
+
+StoryListItem > .story-meta {
+    color: $text-muted;
+}
+
+StoryListItem.-highlight {
+    background: $accent;
+}
+
+StoryListItem.-highlight > .story-title,
+StoryListItem.-highlight > .story-meta {
+    color: $text;
+}
+
+#story-title {
+    padding: 1 2;
+    text-style: bold;
+    color: $accent;
+}
+
+#story-details {
+    padding: 0 2;
+    color: $text-muted;
+}
