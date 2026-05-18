@@ -122,11 +122,18 @@ class StoryListItem(ListItem):
 class CommentListItem(ListItem):
     """Focusable nested comment row."""
 
-    def __init__(self, node: CommentNode, depth: int, story_author: str | None) -> None:
+    def __init__(
+        self,
+        node: CommentNode,
+        depth: int,
+        story_author: str | None,
+        collapsed: bool = False,
+    ) -> None:
         super().__init__()
         self.node = node
         self.depth = depth
         self.story_author = story_author
+        self.collapsed = collapsed
 
     def compose(self) -> ComposeResult:
         """Render comment metadata and body."""
@@ -138,9 +145,12 @@ class CommentListItem(ListItem):
         comment = self.node.comment
         author = comment.by or "unknown"
         age = comment.age() if comment.time else "unknown"
+        toggle = ""
+        if self.node.replies:
+            toggle = "[+] " if self.collapsed else "[-] "
         marker = " [OP]" if author == self.story_author else ""
         state = " [dead]" if comment.dead else " [deleted]" if comment.deleted else ""
-        return f"{author}{marker} | {age}{state}"
+        return f"{toggle}{author}{marker} | {age}{state}"
 
     def _body_text(self) -> str:
         comment = self.node.comment
@@ -160,12 +170,15 @@ class CommentsScreen(Screen[None]):
         ("b", "back", "Back"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        Binding("enter", "toggle_comment", "Collapse/Expand", priority=True),
+        Binding("right", "toggle_comment", "Collapse/Expand", priority=True),
     ]
 
     def __init__(self, story: Story) -> None:
         super().__init__()
         self.story = story
         self.comment_nodes: list[CommentNode] = []
+        self.collapsed_comment_ids: set[int] = set()
 
     def compose(self) -> ComposeResult:
         """Compose the comments screen."""
@@ -198,9 +211,8 @@ class CommentsScreen(Screen[None]):
             logger.debug("Failed to load comments for story {}: {}", self.story.id, exc)
             return
 
-        flattened = list(self._flatten_comments(self.comment_nodes))
-        for node, depth in flattened:
-            await comments_view.append(CommentListItem(node, depth, self.story.by))
+        flattened = list(self._visible_comments())
+        await self._render_comments(comments_view, flattened)
 
         status.update(f"{len(flattened)} comments loaded")
         if flattened:
@@ -214,9 +226,52 @@ class CommentsScreen(Screen[None]):
         """Move the comment selection up."""
         self.query_one("#comments", ListView).action_cursor_up()
 
+    async def action_toggle_comment(self) -> None:
+        """Collapse or expand the selected comment when it has replies."""
+        comments_view = self.query_one("#comments", ListView)
+        selected = comments_view.highlighted_child
+        if not isinstance(selected, CommentListItem) or not selected.node.replies:
+            return
+
+        comment_id = selected.node.comment.id
+        if comment_id in self.collapsed_comment_ids:
+            self.collapsed_comment_ids.remove(comment_id)
+        else:
+            self.collapsed_comment_ids.add(comment_id)
+
+        visible_comments = list(self._visible_comments())
+        new_index = next(
+            (
+                index
+                for index, (node, _depth) in enumerate(visible_comments)
+                if node.comment.id == comment_id
+            ),
+            0,
+        )
+        await self._render_comments(comments_view, visible_comments)
+        if visible_comments:
+            comments_view.index = new_index
+
     def action_back(self) -> None:
         """Return to the story list."""
         self.app.pop_screen()
+
+    async def _render_comments(
+        self,
+        comments_view: ListView,
+        comments: list[tuple[CommentNode, int]],
+    ) -> None:
+        """Replace the list contents with the currently visible comments."""
+        await comments_view.clear()
+        for node, depth in comments:
+            await comments_view.append(
+                CommentListItem(
+                    node,
+                    depth,
+                    self.story.by,
+                    collapsed=node.comment.id in self.collapsed_comment_ids,
+                )
+            )
 
     async def _fetch_comment_nodes(self, comment_ids: list[int]) -> list[CommentNode]:
         """Fetch comment IDs and their children, preserving Hacker News order."""
@@ -248,6 +303,17 @@ class CommentsScreen(Screen[None]):
             flattened.append((node, depth))
             flattened.extend(self._flatten_comments(node.replies, depth + 1))
         return flattened
+
+    def _visible_comments(
+        self, nodes: list[CommentNode] | None = None, depth: int = 0
+    ) -> list[tuple[CommentNode, int]]:
+        """Return comments in display order, excluding collapsed descendants."""
+        visible: list[tuple[CommentNode, int]] = []
+        for node in self.comment_nodes if nodes is None else nodes:
+            visible.append((node, depth))
+            if node.comment.id not in self.collapsed_comment_ids:
+                visible.extend(self._visible_comments(node.replies, depth + 1))
+        return visible
 
     @property
     def hews_app(self) -> "HewsApp":

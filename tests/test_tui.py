@@ -306,7 +306,110 @@ async def test_comments_screen_loads_story_and_nested_comments() -> None:
         assert isinstance(op_comment, CommentListItem)
         assert first.depth == 0
         assert nested.depth == 1
+        assert first._metadata_text().startswith("[-] bob")
+        assert not nested._metadata_text().startswith(("[+]", "[-]"))
         assert op_comment._metadata_text().startswith("alice [OP]")
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_collapses_and_expands_selected_thread() -> None:
+    """Enter hides and restores descendants for a comment thread."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        score=99,
+        descendants=4,
+        by="alice",
+        kids=[11, 12],
+    )
+    comments = {
+        11: Comment(
+            id=11,
+            type=ItemType.COMMENT,
+            parent=10,
+            by="bob",
+            text="First comment",
+            kids=[13],
+        ),
+        12: Comment(
+            id=12,
+            type=ItemType.COMMENT,
+            parent=10,
+            by="dana",
+            text="Second comment",
+            kids=[14],
+        ),
+        13: Comment(
+            id=13,
+            type=ItemType.COMMENT,
+            parent=11,
+            by="carol",
+            text="Nested reply",
+        ),
+        14: Comment(
+            id=14,
+            type=ItemType.COMMENT,
+            parent=12,
+            by="erin",
+            text="Another nested reply",
+        ),
+    }
+    client = AsyncMock()
+    client.fetch_item.side_effect = lambda item_id: comments[item_id]
+    app = HewsApp(hn_client=client)
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        comments_view = screen.query_one("#comments", ListView)
+        assert len(comments_view.children) == 4
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        visible_ids = [
+            child.node.comment.id
+            for child in comments_view.children
+            if isinstance(child, CommentListItem)
+        ]
+        assert visible_ids == [11, 12, 14]
+        assert comments_view.index == 0
+        selected = comments_view.children[0]
+        assert isinstance(selected, CommentListItem)
+        assert selected._metadata_text().startswith("[+] bob")
+
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        visible_ids = [
+            child.node.comment.id
+            for child in comments_view.children
+            if isinstance(child, CommentListItem)
+        ]
+        assert visible_ids == [11, 12]
+        assert comments_view.index == 1
+        selected = comments_view.children[1]
+        assert isinstance(selected, CommentListItem)
+        assert selected._metadata_text().startswith("[+] dana")
+
+        await pilot.press("right")
+        await pilot.pause()
+
+        visible_ids = [
+            child.node.comment.id
+            for child in comments_view.children
+            if isinstance(child, CommentListItem)
+        ]
+        assert visible_ids == [11, 12, 14]
+        assert comments_view.index == 1
+        selected = comments_view.children[1]
+        assert isinstance(selected, CommentListItem)
+        assert selected._metadata_text().startswith("[-] dana")
 
 
 @pytest.mark.asyncio
