@@ -337,11 +337,11 @@ async def test_comments_screen_back_binding_returns_to_story_list(
 def test_html_to_plain_text_formats_common_hn_markup() -> None:
     """HN HTML is converted to readable terminal text."""
     text = html_to_plain_text(
-        "<p>Hello&nbsp;<b>world</b></p><p>Line<br>two</p>"
+        "<p>Hello&nbsp;<b>world</b> &lt;not-a-tag&gt;</p><p>Line<br>two</p>"
         "<pre>code\nblock</pre>"
     )
 
-    assert "Hello world" in text
+    assert "Hello world <not-a-tag>" in text
     assert "Line\ntwo" in text
     assert "code\nblock" in text
 

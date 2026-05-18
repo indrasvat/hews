@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from html import unescape
 from html.parser import HTMLParser
 from typing import Optional, cast
 from urllib.parse import urlparse
@@ -500,6 +499,6 @@ def _short_domain(url: str | None) -> str:
 def html_to_plain_text(html: str) -> str:
     """Convert Hacker News item/comment HTML to readable plain text."""
     parser = PlainTextHTMLParser()
-    parser.feed(unescape(html))
+    parser.feed(html)
     parser.close()
     return parser.text()
