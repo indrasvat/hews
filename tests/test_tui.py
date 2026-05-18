@@ -8,8 +8,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from textual.widgets import ListView, Static
 
-from hews.models import ItemType, Story
-from hews.tui import CommentsScreen, HewsApp, StoryListItem, StoryListScreen
+from hews.models import Comment, ItemType, Story
+from hews.tui import (
+    CommentListItem,
+    CommentsScreen,
+    HewsApp,
+    StoryListItem,
+    StoryListScreen,
+    html_to_plain_text,
+)
 
 
 @pytest.fixture
@@ -239,6 +246,104 @@ async def test_story_list_arrow_keys_move_selection(fake_client: AsyncMock) -> N
         assert list_view.index == 1
         await pilot.press("up")
         assert list_view.index == 0
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_loads_story_and_nested_comments() -> None:
+    """The comments screen renders story details and nested comment rows."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        score=99,
+        descendants=3,
+        by="alice",
+        text="<p>Story body</p>",
+        kids=[11, 12],
+    )
+    comments = {
+        11: Comment(
+            id=11,
+            type=ItemType.COMMENT,
+            parent=10,
+            by="bob",
+            text="<p>First comment</p>",
+            kids=[13],
+        ),
+        12: Comment(
+            id=12,
+            type=ItemType.COMMENT,
+            parent=10,
+            by="alice",
+            text="<p>OP follow-up</p>",
+        ),
+        13: Comment(
+            id=13,
+            type=ItemType.COMMENT,
+            parent=11,
+            by="carol",
+            text="<p>Nested reply</p>",
+        ),
+    }
+    client = AsyncMock()
+    client.fetch_item.side_effect = lambda item_id: comments[item_id]
+    app = HewsApp(hn_client=client)
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        comments_view = screen.query_one("#comments", ListView)
+        assert len(comments_view.children) == 3
+        assert comments_view.index == 0
+        assert all(isinstance(child, CommentListItem) for child in comments_view.children)
+
+        first, nested, op_comment = comments_view.children
+        assert isinstance(first, CommentListItem)
+        assert isinstance(nested, CommentListItem)
+        assert isinstance(op_comment, CommentListItem)
+        assert first.depth == 0
+        assert nested.depth == 1
+        assert op_comment._metadata_text().startswith("alice [OP]")
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_back_binding_returns_to_story_list(
+    fake_client: AsyncMock,
+) -> None:
+    """The comments screen supports the issue's keyboard back binding."""
+    fake_client.fetch_stories.return_value = [
+        Story(
+            id=10,
+            type=ItemType.STORY,
+            title="Story",
+            kids=[],
+        )
+    ]
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, CommentsScreen)
+
+        await pilot.press("left")
+        await pilot.pause()
+        assert isinstance(app.screen, StoryListScreen)
+
+
+def test_html_to_plain_text_formats_common_hn_markup() -> None:
+    """HN HTML is converted to readable terminal text."""
+    text = html_to_plain_text(
+        "<p>Hello&nbsp;<b>world</b></p><p>Line<br>two</p>"
+        "<pre>code\nblock</pre>"
+    )
+
+    assert "Hello world" in text
+    assert "Line\ntwo" in text
+    assert "code\nblock" in text
 
 
 @pytest.mark.asyncio

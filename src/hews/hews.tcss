@@ -38,13 +38,45 @@ StoryListItem.-highlight > .story-meta {
     color: $text;
 }
 
-#story-title {
+#story-header {
     padding: 1 2;
     text-style: bold;
     color: $accent;
 }
 
-#story-details {
+#story-text {
+    padding: 0 2;
+    height: auto;
+}
+
+#comments-status {
     padding: 0 2;
     color: $text-muted;
+}
+
+#comments {
+    height: 1fr;
+}
+
+CommentListItem {
+    height: auto;
+    min-height: 3;
+    padding: 0 1;
+}
+
+CommentListItem > .comment-meta {
+    color: $text-muted;
+}
+
+CommentListItem > .comment-body {
+    color: $text;
+}
+
+CommentListItem.-highlight {
+    background: $accent;
+}
+
+CommentListItem.-highlight > .comment-meta,
+CommentListItem.-highlight > .comment-body {
+    color: $text;
 }
