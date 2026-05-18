@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from dataclasses import dataclass
+from html.parser import HTMLParser
 from typing import Optional, cast
 from urllib.parse import urlparse
 
@@ -14,7 +16,79 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
-from hews import HNClient, Story
+from hews import HNClient, Comment, Story
+
+
+class PlainTextHTMLParser(HTMLParser):
+    """Convert the small HTML subset used by HN items into readable text."""
+
+    _BLOCK_TAGS = {"p", "div", "pre", "tr", "li"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._in_pre = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Record spacing and useful link targets for supported tags."""
+        if tag == "pre":
+            self._newline()
+            self._in_pre = True
+        elif tag in self._BLOCK_TAGS:
+            self._newline()
+            if tag == "li":
+                self._parts.append("- ")
+        elif tag == "br":
+            self._newline()
+        elif tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                self._parts.append(" ")
+                self._parts.append(f"<{href}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        """Close block tags with a visual break."""
+        if tag in self._BLOCK_TAGS or tag == "br":
+            self._newline()
+        if tag == "pre":
+            self._in_pre = False
+
+    def handle_data(self, data: str) -> None:
+        """Append text content, preserving preformatted spacing where useful."""
+        if self._in_pre:
+            self._parts.append(data)
+            return
+
+        collapsed = " ".join(data.split())
+        if collapsed:
+            if self._parts and not self._parts[-1].endswith(("\n", " ", "/")):
+                self._parts.append(" ")
+            self._parts.append(collapsed)
+
+    def text(self) -> str:
+        """Return normalized plain text."""
+        lines = [line.rstrip() for line in "".join(self._parts).splitlines()]
+        compact: list[str] = []
+        previous_blank = False
+        for line in lines:
+            blank = not line.strip()
+            if blank and previous_blank:
+                continue
+            compact.append(line)
+            previous_blank = blank
+        return "\n".join(compact).strip()
+
+    def _newline(self) -> None:
+        if self._parts and not self._parts[-1].endswith("\n"):
+            self._parts.append("\n")
+
+
+@dataclass(slots=True)
+class CommentNode:
+    """A fetched comment with its nested replies."""
+
+    comment: Comment
+    replies: list["CommentNode"]
 
 
 class StoryListItem(ListItem):
@@ -45,33 +119,153 @@ class StoryListItem(ListItem):
         return f"{score} points by {author} | {comments} comments | {age}"
 
 
-class CommentsScreen(Screen[None]):
-    """Placeholder story-detail screen until full comments support lands."""
+class CommentListItem(ListItem):
+    """Focusable nested comment row."""
 
-    BINDINGS = [("escape", "back", "Back"), ("b", "back", "Back")]
+    def __init__(self, node: CommentNode, depth: int, story_author: str | None) -> None:
+        super().__init__()
+        self.node = node
+        self.depth = depth
+        self.story_author = story_author
+
+    def compose(self) -> ComposeResult:
+        """Render comment metadata and body."""
+        self.styles.padding = (0, 1, 0, min(self.depth * 4, 24))
+        yield Label(self._metadata_text(), classes="comment-meta")
+        yield Static(self._body_text(), classes="comment-body")
+
+    def _metadata_text(self) -> str:
+        comment = self.node.comment
+        author = comment.by or "unknown"
+        age = comment.age() if comment.time else "unknown"
+        marker = " [OP]" if author == self.story_author else ""
+        state = " [dead]" if comment.dead else " [deleted]" if comment.deleted else ""
+        return f"{author}{marker} | {age}{state}"
+
+    def _body_text(self) -> str:
+        comment = self.node.comment
+        if comment.deleted:
+            return "[deleted]"
+        if comment.dead:
+            return "[dead]"
+        return html_to_plain_text(comment.text or "").strip() or "[no text]"
+
+
+class CommentsScreen(Screen[None]):
+    """Story-detail screen with a nested Hacker News comment thread."""
+
+    BINDINGS = [
+        ("escape", "back", "Back"),
+        ("left", "back", "Back"),
+        ("b", "back", "Back"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+    ]
 
     def __init__(self, story: Story) -> None:
         super().__init__()
         self.story = story
+        self.comment_nodes: list[CommentNode] = []
 
     def compose(self) -> ComposeResult:
-        """Compose the placeholder comments screen."""
+        """Compose the comments screen."""
         yield Header()
-        yield Static(self.story.title or "Untitled", id="story-title")
-        yield Static(self._story_details(), id="story-details")
+        yield Static(self._story_header(), id="story-header")
+        if self.story.text:
+            yield Static(html_to_plain_text(self.story.text), id="story-text")
+        yield Static("Loading comments...", id="comments-status")
+        yield ListView(id="comments")
         yield Footer()
+
+    async def on_mount(self) -> None:
+        """Fetch and display comments after the screen is mounted."""
+        await self.load_comments()
+
+    async def load_comments(self) -> None:
+        """Fetch all comments recursively and populate the list."""
+        status = self.query_one("#comments-status", Static)
+        comments_view = self.query_one("#comments", ListView)
+        await comments_view.clear()
+
+        if not self.story.kids:
+            status.update("No comments.")
+            return
+
+        try:
+            self.comment_nodes = await self._fetch_comment_nodes(self.story.kids)
+        except Exception as exc:
+            status.update(f"Error loading comments: {exc}")
+            logger.debug("Failed to load comments for story {}: {}", self.story.id, exc)
+            return
+
+        flattened = list(self._flatten_comments(self.comment_nodes))
+        for node, depth in flattened:
+            await comments_view.append(CommentListItem(node, depth, self.story.by))
+
+        status.update(f"{len(flattened)} comments loaded")
+        if flattened:
+            comments_view.index = 0
+
+    async def action_cursor_down(self) -> None:
+        """Move the comment selection down."""
+        self.query_one("#comments", ListView).action_cursor_down()
+
+    async def action_cursor_up(self) -> None:
+        """Move the comment selection up."""
+        self.query_one("#comments", ListView).action_cursor_up()
 
     def action_back(self) -> None:
         """Return to the story list."""
         self.app.pop_screen()
 
-    def _story_details(self) -> str:
+    async def _fetch_comment_nodes(self, comment_ids: list[int]) -> list[CommentNode]:
+        """Fetch comment IDs and their children, preserving Hacker News order."""
+        results = await asyncio.gather(
+            *(self._fetch_comment_node(comment_id) for comment_id in comment_ids)
+        )
+        return [node for node in results if node is not None]
+
+    async def _fetch_comment_node(self, comment_id: int) -> CommentNode | None:
+        """Fetch a single comment and its replies."""
+        try:
+            item = await self.hews_app.hn_client.fetch_item(comment_id)
+        except Exception as exc:
+            logger.debug("Skipping comment {} after fetch error: {}", comment_id, exc)
+            return None
+
+        if not isinstance(item, Comment):
+            return None
+
+        replies = await self._fetch_comment_nodes(item.kids) if item.kids else []
+        return CommentNode(comment=item, replies=replies)
+
+    def _flatten_comments(
+        self, nodes: list[CommentNode], depth: int = 0
+    ) -> list[tuple[CommentNode, int]]:
+        """Return comments in depth-first display order."""
+        flattened: list[tuple[CommentNode, int]] = []
+        for node in nodes:
+            flattened.append((node, depth))
+            flattened.extend(self._flatten_comments(node.replies, depth + 1))
+        return flattened
+
+    @property
+    def hews_app(self) -> "HewsApp":
+        """Return the concrete Hews app instance for typed access."""
+        return cast("HewsApp", self.app)
+
+    def _story_header(self) -> str:
         score = self.story.score or 0
         comments = self.story.descendants or 0
         author = self.story.by or "unknown"
+        age = self.story.age() if self.story.time else "unknown"
+        title = self.story.title or "Untitled"
+        domain = _short_domain(self.story.url)
+        if domain:
+            title = f"{title} ({domain})"
         return (
-            f"{score} points by {author} | {comments} comments\n"
-            "Full comments view will be implemented in issue #41."
+            f"{title}\n"
+            f"{score} points by {author} | {comments} comments | {age}"
         )
 
 
@@ -300,3 +494,11 @@ def _short_domain(url: str | None) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def html_to_plain_text(html: str) -> str:
+    """Convert Hacker News item/comment HTML to readable plain text."""
+    parser = PlainTextHTMLParser()
+    parser.feed(html)
+    parser.close()
+    return parser.text()
