@@ -6,13 +6,14 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from textual.widgets import ListView, Static
+from textual.widgets import Input, ListView, Static
 
 from hews.models import Comment, ItemType, Story
 from hews.tui import (
     CommentListItem,
     CommentsScreen,
     HewsApp,
+    SearchDialog,
     StoryListItem,
     StoryListScreen,
     html_to_plain_text,
@@ -529,16 +530,132 @@ async def test_story_list_empty_open_notifies(fake_client: AsyncMock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_story_list_search_binding_notifies_user(fake_client: AsyncMock) -> None:
-    """The search trigger is wired for the future search UI task."""
+async def test_story_list_search_binding_opens_input_dialog(
+    fake_client: AsyncMock,
+) -> None:
+    """The search trigger opens a focused query prompt."""
     app = HewsApp(hn_client=fake_client)
 
     async with app.run_test() as pilot:
-        with patch.object(app, "notify") as notify:
-            await pilot.press("/")
-            await pilot.pause()
+        await pilot.press("/")
+        await pilot.pause()
 
-    notify.assert_called_once_with("Search UI coming soon.", title="Hews")
+        assert isinstance(app.screen, SearchDialog)
+        search_input = app.screen.query_one("#search-query", Input)
+        assert search_input.has_focus
+
+
+@pytest.mark.asyncio
+async def test_story_list_search_dialog_pushes_results_screen(
+    fake_client: AsyncMock,
+) -> None:
+    """Submitting a query opens a reusable story-list screen for results."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        await pilot.press("/")
+        await pilot.press(*list("database"), "enter")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        assert screen.search_query == "database"
+        status = screen.query_one("#status", Static)
+        assert str(status.renderable) == "Search results for 'database'"
+
+    fake_client.search.assert_awaited_once_with("database", limit=30)
+
+
+@pytest.mark.asyncio
+async def test_story_list_search_dialog_cancel_keeps_current_list(
+    fake_client: AsyncMock,
+) -> None:
+    """Escape closes the search prompt without changing the active list."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        original_screen = app.screen
+        await pilot.press("/")
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert app.screen is original_screen
+
+    fake_client.search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_story_list_search_dialog_empty_submit_keeps_current_list(
+    fake_client: AsyncMock,
+) -> None:
+    """Blank searches are ignored instead of pushing an empty results screen."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        original_screen = app.screen
+        await pilot.press("/")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.screen is original_screen
+
+    fake_client.search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_story_list_search_results_back_returns_to_previous_list(
+    fake_client: AsyncMock,
+) -> None:
+    """Back from pushed search results returns to the invoking story list."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        original_screen = app.screen
+        await pilot.press("/")
+        await pilot.press(*list("database"), "enter")
+        await pilot.pause()
+        assert isinstance(app.screen, StoryListScreen)
+        assert app.screen.search_query == "database"
+
+        await pilot.press("left")
+        await pilot.pause()
+
+        assert app.screen is original_screen
+        assert isinstance(app.screen, StoryListScreen)
+        assert app.screen.search_query is None
+
+
+@pytest.mark.asyncio
+async def test_initial_search_results_back_exits_app(fake_client: AsyncMock) -> None:
+    """Back exits when an initial search result is the only screen."""
+    app = HewsApp(initial_search="database", hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        assert isinstance(app.screen, StoryListScreen)
+        assert app.screen.search_query == "database"
+
+        await pilot.press("left")
+        await pilot.pause()
+
+        assert not app.is_running
+
+
+@pytest.mark.asyncio
+async def test_empty_search_results_show_friendly_status(
+    fake_client: AsyncMock,
+) -> None:
+    """Empty result sets use explicit no-results copy."""
+    fake_client.search.return_value = []
+    app = HewsApp(initial_search="unlikely-query", hn_client=fake_client)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        status = screen.query_one("#status", Static)
+        list_view = screen.query_one("#stories", ListView)
+        assert str(status.renderable) == "No results found for 'unlikely-query'"
+        assert len(list_view.children) == 0
 
 
 @pytest.mark.asyncio

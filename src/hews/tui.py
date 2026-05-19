@@ -13,8 +13,8 @@ from urllib.parse import urlparse
 from loguru import logger
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from hews import HNClient, Comment, Story
 
@@ -161,13 +161,38 @@ class CommentListItem(ListItem):
         return html_to_plain_text(comment.text or "").strip() or "[no text]"
 
 
+class SearchDialog(ModalScreen[str | None]):
+    """Modal prompt for entering a Hacker News search query."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        """Compose the search prompt."""
+        yield Static("Search HN", id="search-title")
+        yield Input(placeholder="Search HN: ", id="search-query")
+
+    def on_mount(self) -> None:
+        """Focus the query input when the dialog opens."""
+        self.query_one("#search-query", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Close with a trimmed query, or cancel if it is empty."""
+        event.stop()
+        query = event.value.strip()
+        self.dismiss(query or None)
+
+    def action_cancel(self) -> None:
+        """Dismiss the dialog without running a search."""
+        self.dismiss(None)
+
+
 class CommentsScreen(Screen[None]):
     """Story-detail screen with a nested Hacker News comment thread."""
 
     BINDINGS = [
-        ("escape", "back", "Back"),
-        ("left", "back", "Back"),
-        ("b", "back", "Back"),
+        Binding("escape", "back", "Back", priority=True),
+        Binding("left", "back", "Back", priority=True),
+        Binding("b", "back", "Back", priority=True),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         Binding("enter", "toggle_comment", "Collapse/Expand", priority=True),
@@ -339,6 +364,9 @@ class StoryListScreen(Screen[None]):
     """Screen that displays either a Hacker News section or search results."""
 
     BINDINGS = [
+        ("escape", "back", "Back"),
+        ("left", "back", "Back"),
+        ("b", "back", "Back"),
         ("r", "refresh", "Refresh"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
@@ -414,7 +442,10 @@ class StoryListScreen(Screen[None]):
         self.stories = stories
         await self.display_stories(stories)
         if not stories:
-            status.update(f"{status.renderable} - no stories to show")
+            if self.search_query:
+                status.update(f"No results found for '{self.search_query}'")
+            else:
+                status.update(f"{status.renderable} - no stories to show")
         elif self.hews_app.is_authenticated:
             status.update(f"{status.renderable} - logged in")
 
@@ -458,9 +489,24 @@ class StoryListScreen(Screen[None]):
         self.search_query = None
         await self.load_stories(force_refresh=False)
 
-    def action_search(self) -> None:
-        """Notify that search UI will be handled by a later issue."""
-        self.app.notify("Search UI coming soon.", title="Hews")
+    async def action_search(self) -> None:
+        """Prompt for a query and push a search-results screen."""
+        await self.app.push_screen(SearchDialog(), self._handle_search_query)
+
+    async def _handle_search_query(self, query: str | None) -> None:
+        """Open search results after the modal submits a non-empty query."""
+        if query:
+            await self.app.push_screen(StoryListScreen(search_query=query))
+
+    def action_back(self) -> None:
+        """Return from search results, or exit when search is the only screen."""
+        previous_screen = (
+            self.app.screen_stack[-2] if len(self.app.screen_stack) > 1 else None
+        )
+        if isinstance(previous_screen, StoryListScreen):
+            self.app.pop_screen()
+        elif self.search_query:
+            self.app.exit()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Open a story when activated through keyboard or mouse."""

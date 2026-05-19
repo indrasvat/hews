@@ -24,7 +24,7 @@ run_case() {
   shux pane send-keys -s "$name" --text "j"
   shux pane send-keys -s "$name" --data "DQ=="
   shux pane wait-for -s "$name" --text "Second deterministic story" --timeout-ms 15000
-  shux pane wait-for -s "$name" --text "Full comments view" --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "No comments." --timeout-ms 15000
   shux --format json pane snapshot -s "$name" \
     | jq -r .png_base64 \
     | base64 -d > ".shux/out/${name}-comments.png"
@@ -40,7 +40,18 @@ run_case() {
     | jq -r .png_base64 \
     | base64 -d > ".shux/out/${name}-ask.png"
   shux pane send-keys -s "$name" --text "/"
-  shux pane wait-for -s "$name" --text "Search UI coming soon" --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "Search HN" --timeout-ms 15000
+  shux --format json pane snapshot -s "$name" \
+    | jq -r .png_base64 \
+    | base64 -d > ".shux/out/${name}-search-prompt.png"
+  shux pane send-keys -s "$name" --text "database"
+  shux pane send-keys -s "$name" --data "DQ=="
+  shux pane wait-for -s "$name" --text "Search fixture story for database" --timeout-ms 15000
+  shux --format json pane snapshot -s "$name" \
+    | jq -r .png_base64 \
+    | base64 -d > ".shux/out/${name}-search-results.png"
+  shux pane send-keys -s "$name" --data "G1tE"
+  shux pane wait-for -s "$name" --text "(ask)" --timeout-ms 15000
   shux pane send-keys -s "$name" --text "?"
   shux pane wait-for -s "$name" --text "Help overlay coming soon" --timeout-ms 15000
   shux --format json pane snapshot -s "$name" \

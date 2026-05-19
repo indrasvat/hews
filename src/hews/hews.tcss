@@ -80,3 +80,22 @@ CommentListItem.-highlight > .comment-meta,
 CommentListItem.-highlight > .comment-body {
     color: $text;
 }
+
+SearchDialog {
+    align: center middle;
+    background: $background 60%;
+}
+
+#search-title {
+    width: 60;
+    padding: 1 2 0 2;
+    background: $surface;
+    color: $accent;
+    text-style: bold;
+}
+
+#search-query {
+    width: 60;
+    padding: 0 2 1 2;
+    background: $surface;
+}
