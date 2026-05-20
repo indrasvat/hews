@@ -86,6 +86,11 @@ SearchDialog {
     background: $background 60%;
 }
 
+ReplyDialog {
+    align: center middle;
+    background: $background 60%;
+}
+
 #search-title {
     width: 60;
     padding: 1 2 0 2;
@@ -94,8 +99,22 @@ SearchDialog {
     text-style: bold;
 }
 
+#reply-title {
+    width: 70;
+    padding: 1 2 0 2;
+    background: $surface;
+    color: $accent;
+    text-style: bold;
+}
+
 #search-query {
     width: 60;
+    padding: 0 2 1 2;
+    background: $surface;
+}
+
+#reply-text {
+    width: 70;
     padding: 0 2 1 2;
     background: $surface;
 }

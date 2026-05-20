@@ -6,7 +6,7 @@ import argparse
 import datetime as dt
 from dataclasses import dataclass
 
-from hews.models import ItemType, Story
+from hews.models import Comment, ItemType, Story
 from hews.tui import HewsApp
 
 
@@ -35,6 +35,16 @@ class FakeHNClient:
         self.logged_in = True
         return True
 
+    async def fetch_item(self, item_id: int) -> Comment:
+        comments = _comments()
+        return comments[item_id]
+
+    async def upvote(self, item_id: int, is_comment: bool) -> bool:
+        return self.logged_in and item_id in {1001, 1101, 1102}
+
+    async def post_comment(self, parent_id: int, text: str) -> bool:
+        return self.logged_in and parent_id in {1001, 1101, 1102} and bool(text.strip())
+
 
 def _stories(first_title: str) -> list[Story]:
     now = dt.datetime.now(dt.timezone.utc)
@@ -47,6 +57,7 @@ def _stories(first_title: str) -> list[Story]:
             descendants=42,
             by="visual-user",
             time=now - dt.timedelta(hours=2),
+            kids=[1101, 1102],
         ),
         Story(
             id=1002,
@@ -58,6 +69,28 @@ def _stories(first_title: str) -> list[Story]:
             time=now - dt.timedelta(hours=5),
         ),
     ]
+
+
+def _comments() -> dict[int, Comment]:
+    now = dt.datetime.now(dt.timezone.utc)
+    return {
+        1101: Comment(
+            id=1101,
+            type=ItemType.COMMENT,
+            parent=1001,
+            by="alice",
+            time=now - dt.timedelta(minutes=35),
+            text="<p>This deterministic comment can be upvoted and replied to.</p>",
+        ),
+        1102: Comment(
+            id=1102,
+            type=ItemType.COMMENT,
+            parent=1001,
+            by="visual-user",
+            time=now - dt.timedelta(minutes=20),
+            text="<p>Original poster follow-up for visual verification.</p>",
+        ),
+    }
 
 
 def main() -> None:
