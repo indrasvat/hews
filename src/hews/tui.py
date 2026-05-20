@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import os
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -17,6 +18,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from hews import HNClient, Comment, Story
+from hews.models import ItemType
 
 
 class PlainTextHTMLParser(HTMLParser):
@@ -89,6 +91,7 @@ class CommentNode:
 
     comment: Comment
     replies: list["CommentNode"]
+    local_by_user: bool = False
 
 
 class StoryListItem(ListItem):
@@ -149,6 +152,8 @@ class CommentListItem(ListItem):
         if self.node.replies:
             toggle = "[+] " if self.collapsed else "[-] "
         marker = " [OP]" if author == self.story_author else ""
+        if self.node.local_by_user:
+            marker = f"{marker} (You)"
         state = " [dead]" if comment.dead else " [deleted]" if comment.deleted else ""
         return f"{toggle}{author}{marker} | {age}{state}"
 
@@ -186,8 +191,40 @@ class SearchDialog(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ReplyDialog(ModalScreen[str | None]):
+    """Modal prompt for composing a Hacker News reply."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, target_label: str) -> None:
+        super().__init__()
+        self.target_label = target_label
+
+    def compose(self) -> ComposeResult:
+        """Compose the reply prompt."""
+        yield Static(f"Reply to {self.target_label}", id="reply-title")
+        yield Input(placeholder="Comment text: ", id="reply-text")
+
+    def on_mount(self) -> None:
+        """Focus the reply input when the dialog opens."""
+        self.query_one("#reply-text", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Close with trimmed reply text, or cancel if it is empty."""
+        event.stop()
+        text = event.value.strip()
+        self.dismiss(text or None)
+
+    def action_cancel(self) -> None:
+        """Dismiss the dialog without posting."""
+        self.dismiss(None)
+
+
 class CommentsScreen(Screen[None]):
     """Story-detail screen with a nested Hacker News comment thread."""
+
+    _interaction_in_progress: bool
+    _pending_comment_id: int
 
     BINDINGS = [
         Binding("escape", "back", "Back", priority=True),
@@ -195,6 +232,8 @@ class CommentsScreen(Screen[None]):
         Binding("b", "back", "Back", priority=True),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("u", "upvote_selected", "Upvote"),
+        ("c", "comment_selected", "Comment"),
         Binding("enter", "toggle_comment", "Collapse/Expand", priority=True),
         Binding("right", "toggle_comment", "Collapse/Expand", priority=True),
     ]
@@ -204,6 +243,8 @@ class CommentsScreen(Screen[None]):
         self.story = story
         self.comment_nodes: list[CommentNode] = []
         self.collapsed_comment_ids: set[int] = set()
+        self._interaction_in_progress = False
+        self._pending_comment_id = -1
 
     def compose(self) -> ComposeResult:
         """Compose the comments screen."""
@@ -280,6 +321,144 @@ class CommentsScreen(Screen[None]):
     def action_back(self) -> None:
         """Return to the story list."""
         self.app.pop_screen()
+
+    async def action_upvote_selected(self) -> None:
+        """Upvote the selected comment, or the story when no comment is selected."""
+        if self._interaction_in_progress:
+            return
+        if not self.hews_app.is_authenticated:
+            self._show_action_status("Login required to upvote.")
+            self.app.notify("Login required to upvote.", title="Hews")
+            return
+
+        selected = self._selected_comment_item()
+        is_comment = selected is not None
+        item_id = selected.node.comment.id if selected else self.story.id
+        label = "comment" if is_comment else "story"
+
+        self._interaction_in_progress = True
+        self._show_action_status(f"Upvoting {label}...")
+        try:
+            upvoted = await self.hews_app.hn_client.upvote(item_id, is_comment)
+        except Exception as exc:
+            logger.debug("Failed to upvote {} {}: {}", label, item_id, exc)
+            upvoted = False
+        finally:
+            self._interaction_in_progress = False
+
+        if upvoted:
+            self._show_action_status(f"Upvoted {label}.")
+            self.app.notify(f"Upvoted {label}.", title="Hews")
+        else:
+            self._show_action_status(f"Failed to upvote {label}.")
+            self.app.notify(f"Failed to upvote {label}.", title="Hews")
+
+    async def action_comment_selected(self) -> None:
+        """Open a reply prompt for the selected comment or story."""
+        if self._interaction_in_progress:
+            return
+        if not self.hews_app.is_authenticated:
+            self._show_action_status("Login required to comment.")
+            self.app.notify("Login required to comment.", title="Hews")
+            return
+
+        selected = self._selected_comment_item()
+        target_label = (
+            f"comment by {selected.node.comment.by or 'unknown'}"
+            if selected
+            else "story"
+        )
+        await self.app.push_screen(
+            ReplyDialog(target_label),
+            lambda text: self._handle_reply_text(
+                text,
+                selected.node if selected else None,
+            ),
+        )
+
+    async def _handle_reply_text(
+        self,
+        text: str | None,
+        parent_node: CommentNode | None,
+    ) -> None:
+        """Post submitted reply text and update the local thread."""
+        if text is None or self._interaction_in_progress:
+            return
+
+        parent_id = parent_node.comment.id if parent_node else self.story.id
+        self._interaction_in_progress = True
+        self._show_action_status("Posting comment...")
+        try:
+            posted = await self.hews_app.hn_client.post_comment(parent_id, text)
+        except Exception as exc:
+            logger.debug("Failed to post comment to {}: {}", parent_id, exc)
+            posted = False
+        finally:
+            self._interaction_in_progress = False
+
+        if not posted:
+            self._show_action_status("Failed to post comment.")
+            self.app.notify("Failed to post comment.", title="Hews")
+            return
+
+        new_node = self._new_pending_comment(parent_id, text)
+        if parent_node:
+            parent_node.replies.append(new_node)
+            parent_node.comment.kids.append(new_node.comment.id)
+            self.collapsed_comment_ids.discard(parent_node.comment.id)
+        else:
+            self.comment_nodes.append(new_node)
+            self.story.kids.append(new_node.comment.id)
+            self.story.descendants = (self.story.descendants or 0) + 1
+            self.query_one("#story-header", Static).update(self._story_header())
+
+        await self._rerender_and_select(new_node.comment.id)
+        self._show_action_status("Comment posted.")
+        self.app.notify("Comment posted.", title="Hews")
+
+    async def _rerender_and_select(self, comment_id: int) -> None:
+        """Rerender visible comments and select a specific comment."""
+        comments_view = self.query_one("#comments", ListView)
+        visible_comments = list(self._visible_comments())
+        await self._render_comments(comments_view, visible_comments)
+        index = next(
+            (
+                idx
+                for idx, (node, _depth) in enumerate(visible_comments)
+                if node.comment.id == comment_id
+            ),
+            None,
+        )
+        if index is not None:
+            comments_view.index = index
+
+    def _new_pending_comment(self, parent_id: int, text: str) -> CommentNode:
+        """Create a local comment node after HN accepts the submitted text."""
+        comment_id = self._pending_comment_id
+        self._pending_comment_id -= 1
+        username = os.environ.get("HN_USERNAME") or "You"
+        return CommentNode(
+            comment=Comment(
+                id=comment_id,
+                type=ItemType.COMMENT,
+                parent=parent_id,
+                by=username,
+                text=text,
+                time=dt.datetime.now(dt.timezone.utc),
+            ),
+            replies=[],
+            local_by_user=True,
+        )
+
+    def _selected_comment_item(self) -> CommentListItem | None:
+        """Return the highlighted comment row, if any."""
+        comments_view = self.query_one("#comments", ListView)
+        selected = comments_view.highlighted_child
+        return selected if isinstance(selected, CommentListItem) else None
+
+    def _show_action_status(self, message: str) -> None:
+        """Update the comments status line with action feedback."""
+        self.query_one("#comments-status", Static).update(message)
 
     async def _render_comments(
         self,
@@ -594,8 +773,12 @@ class HewsApp(App[None]):
             active_screen.show_authenticated_status()
 
     def action_help(self) -> None:
-        """Show a placeholder help message until the help overlay exists."""
-        self.notify("Help overlay coming soon.", title="Hews")
+        """Show the most important keyboard shortcuts."""
+        self.notify(
+            "Open: Enter/Right | Back: Esc/Left | Move: j/k | Refresh: r | "
+            "Search: / | Upvote: u | Comment: c",
+            title="Hews",
+        )
 
 
 def _short_domain(url: str | None) -> str:

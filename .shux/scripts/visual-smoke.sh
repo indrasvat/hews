@@ -21,16 +21,30 @@ run_case() {
     | jq -r .png_base64 \
     | base64 -d > ".shux/out/${name}.png"
 
-  shux pane send-keys -s "$name" --text "j"
   shux pane send-keys -s "$name" --data "DQ=="
-  shux pane wait-for -s "$name" --text "Second deterministic story" --timeout-ms 15000
-  shux pane wait-for -s "$name" --text "No comments." --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "This deterministic comment can be upvoted" --timeout-ms 15000
   shux --format json pane snapshot -s "$name" \
     | jq -r .png_base64 \
-    | base64 -d > ".shux/out/${name}-comments.png"
+    | base64 -d > ".shux/out/${name}-comments-loaded.png"
+  shux pane send-keys -s "$name" --text "u"
+  shux pane wait-for -s "$name" --text "Upvoted comment." --timeout-ms 15000
+  shux --format json pane snapshot -s "$name" \
+    | jq -r .png_base64 \
+    | base64 -d > ".shux/out/${name}-comment-upvoted.png"
+  shux pane send-keys -s "$name" --text "c"
+  shux pane wait-for -s "$name" --text "Reply to comment by alice" --timeout-ms 15000
+  shux --format json pane snapshot -s "$name" \
+    | jq -r .png_base64 \
+    | base64 -d > ".shux/out/${name}-reply-prompt.png"
+  shux pane send-keys -s "$name" --text "Visual reply from shux"
+  shux pane send-keys -s "$name" --data "DQ=="
+  shux pane wait-for -s "$name" --text "Comment posted." --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "Visual reply from shux" --timeout-ms 15000
+  shux --format json pane snapshot -s "$name" \
+    | jq -r .png_base64 \
+    | base64 -d > ".shux/out/${name}-reply-posted.png"
   shux pane send-keys -s "$name" --text "b"
   shux pane wait-for -s "$name" --text "$wait_text" --timeout-ms 15000
-  shux pane send-keys -s "$name" --text "k"
 
   shux pane send-keys -s "$name" --text "r"
   shux pane wait-for -s "$name" --text "$refresh_text" --timeout-ms 15000
@@ -53,7 +67,7 @@ run_case() {
   shux pane send-keys -s "$name" --data "G1tE"
   shux pane wait-for -s "$name" --text "(ask)" --timeout-ms 15000
   shux pane send-keys -s "$name" --text "?"
-  shux pane wait-for -s "$name" --text "Help overlay coming soon" --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "Upvote: u | Comment: c" --timeout-ms 15000
   shux --format json pane snapshot -s "$name" \
     | jq -r .png_base64 \
     | base64 -d > ".shux/out/${name}-help.png"

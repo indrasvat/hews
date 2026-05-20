@@ -13,6 +13,7 @@ from hews.tui import (
     CommentListItem,
     CommentsScreen,
     HewsApp,
+    ReplyDialog,
     SearchDialog,
     StoryListItem,
     StoryListScreen,
@@ -43,6 +44,8 @@ def fake_client(tui_stories: list[Story]) -> AsyncMock:
     client.fetch_stories.return_value = tui_stories
     client.search.return_value = tui_stories
     client.login_from_env.return_value = True
+    client.upvote.return_value = True
+    client.post_comment.return_value = True
     return client
 
 
@@ -197,7 +200,7 @@ async def test_tui_refresh_error_clears_stale_story_state(
 
 @pytest.mark.asyncio
 async def test_tui_help_binding_notifies_user(fake_client: AsyncMock) -> None:
-    """The global help action exists as a placeholder for the future overlay."""
+    """The global help action includes the main keyboard shortcuts."""
     app = HewsApp(hn_client=fake_client)
 
     async with app.run_test() as pilot:
@@ -205,7 +208,11 @@ async def test_tui_help_binding_notifies_user(fake_client: AsyncMock) -> None:
             await pilot.press("?")
             await pilot.pause()
 
-    notify.assert_called_once_with("Help overlay coming soon.", title="Hews")
+    notify.assert_called_once_with(
+        "Open: Enter/Right | Back: Esc/Left | Move: j/k | Refresh: r | "
+        "Search: / | Upvote: u | Comment: c",
+        title="Hews",
+    )
 
 
 @pytest.mark.asyncio
@@ -436,6 +443,207 @@ async def test_comments_screen_back_binding_returns_to_story_list(
         await pilot.press("left")
         await pilot.pause()
         assert isinstance(app.screen, StoryListScreen)
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_upvotes_selected_comment() -> None:
+    """Pressing u upvotes the highlighted comment when logged in."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[11],
+    )
+    comment = Comment(
+        id=11,
+        type=ItemType.COMMENT,
+        parent=10,
+        by="bob",
+        text="First comment",
+    )
+    client = AsyncMock()
+    client.fetch_item.return_value = comment
+    client.upvote.return_value = True
+    app = HewsApp(hn_client=client)
+    app.is_authenticated = True
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("u")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Upvoted comment."
+
+    client.upvote.assert_awaited_once_with(11, True)
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_upvotes_story_when_no_comment_selected() -> None:
+    """Pressing u falls back to the story when the thread has no selection."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[],
+    )
+    client = AsyncMock()
+    client.upvote.return_value = True
+    app = HewsApp(hn_client=client)
+    app.is_authenticated = True
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("u")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Upvoted story."
+
+    client.upvote.assert_awaited_once_with(10, False)
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_upvote_requires_login() -> None:
+    """Unauthenticated upvotes show feedback and do not call the client."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[],
+    )
+    client = AsyncMock()
+    app = HewsApp(hn_client=client)
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("u")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Login required to upvote."
+
+    client.upvote.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_reply_posts_and_inserts_child_comment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Submitting a reply posts it and inserts it under the highlighted comment."""
+    monkeypatch.setenv("HN_USERNAME", "testuser")
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[11],
+    )
+    comment = Comment(
+        id=11,
+        type=ItemType.COMMENT,
+        parent=10,
+        by="bob",
+        text="First comment",
+    )
+    client = AsyncMock()
+    client.fetch_item.return_value = comment
+    client.post_comment.return_value = True
+    app = HewsApp(hn_client=client)
+    app.is_authenticated = True
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, ReplyDialog)
+
+        await pilot.press(*list("Thanks for the context"), "enter")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        comments_view = screen.query_one("#comments", ListView)
+        assert len(comments_view.children) == 2
+        assert comments_view.index == 1
+
+        inserted = comments_view.children[1]
+        assert isinstance(inserted, CommentListItem)
+        assert inserted.depth == 1
+        assert inserted.node.comment.parent == 11
+        assert inserted.node.comment.by == "testuser"
+        assert inserted.node.comment.text == "Thanks for the context"
+
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Comment posted."
+
+    client.post_comment.assert_awaited_once_with(11, "Thanks for the context")
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_reply_requires_login() -> None:
+    """Unauthenticated reply attempts show feedback and skip the dialog."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[],
+    )
+    client = AsyncMock()
+    app = HewsApp(hn_client=client)
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Login required to comment."
+
+    client.post_comment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_ignores_duplicate_interactions() -> None:
+    """A pending comment action prevents repeated submissions."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[],
+    )
+    client = AsyncMock()
+    client.post_comment.return_value = True
+    app = HewsApp(hn_client=client)
+    app.is_authenticated = True
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        screen._interaction_in_progress = True
+        await screen._handle_reply_text("duplicate", None)
+
+    client.post_comment.assert_not_called()
 
 
 def test_html_to_plain_text_formats_common_hn_markup() -> None:
