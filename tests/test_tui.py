@@ -12,6 +12,7 @@ from hews.models import Comment, ItemType, Story
 from hews.tui import (
     CommentListItem,
     CommentsScreen,
+    HelpScreen,
     HewsApp,
     ReplyDialog,
     SearchDialog,
@@ -199,20 +200,41 @@ async def test_tui_refresh_error_clears_stale_story_state(
 
 
 @pytest.mark.asyncio
-async def test_tui_help_binding_notifies_user(fake_client: AsyncMock) -> None:
-    """The global help action includes the main keyboard shortcuts."""
+async def test_tui_help_binding_opens_and_dismisses_overlay(
+    fake_client: AsyncMock,
+) -> None:
+    """The global help action opens a dismissible shortcut reference."""
     app = HewsApp(hn_client=fake_client)
 
     async with app.run_test() as pilot:
-        with patch.object(app, "notify") as notify:
-            await pilot.press("?")
-            await pilot.pause()
+        story_screen = app.screen
+        assert isinstance(story_screen, StoryListScreen)
+        stories = story_screen.query_one("#stories", ListView)
+        assert stories.index == 0
 
-    notify.assert_called_once_with(
-        "Open: Enter/Right | Back: Esc/Left | Move: j/k | Refresh: r | "
-        "Search: / | Upvote: u | Comment: c",
-        title="Hews",
-    )
+        await pilot.press("?")
+        await pilot.pause()
+
+        assert isinstance(app.screen, HelpScreen)
+        content = app.screen.query_one("#help-content", Static)
+        help_text = str(content.renderable)
+        assert "Navigation" in help_text
+        assert "Up/Down or j/k" in help_text
+        assert "t                     Top stories" in help_text
+        assert "Shift+j               Jobs" in help_text
+        assert "u                     Upvote" in help_text
+        assert "c                     Comment" in help_text
+
+        await pilot.press("j")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        assert stories.index == 0
+
+        await pilot.press("?")
+        await pilot.pause()
+
+        assert app.screen is story_screen
+        assert stories.index == 0
 
 
 @pytest.mark.asyncio
