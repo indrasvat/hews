@@ -12,6 +12,8 @@ from typing import Optional, cast
 from urllib.parse import urlparse
 
 from loguru import logger
+from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.screen import ModalScreen, Screen
@@ -19,6 +21,17 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, St
 
 from hews import HNClient, Comment, Story
 from hews.models import ItemType
+
+HEWS_BANNER_LINES = (
+    " _   _  _____ __        __ ____  ",
+    "| | | || ____|\\ \\      / // ___| ",
+    "| |_| ||  _|   \\ \\ /\\ / / \\___ \\ ",
+    "|  _  || |___   \\ V  V /   ___) |",
+    "|_| |_||_____|   \\_/\\_/   |____/ ",
+)
+HEWS_BANNER_WIDTH = len(HEWS_BANNER_LINES[0])
+MIN_BANNER_SCREEN_WIDTH = HEWS_BANNER_WIDTH + 4
+MIN_BANNER_SCREEN_HEIGHT = 16
 
 
 class PlainTextHTMLParser(HTMLParser):
@@ -611,23 +624,32 @@ class StoryListScreen(Screen[None]):
         self,
         section: str = "top",
         search_query: Optional[str] = None,
+        show_banner: bool = True,
     ) -> None:
         super().__init__()
         self.section = section
         self.search_query = search_query
+        self.show_banner = show_banner
         self.stories: list[Story] = []
         self._load_id: object = None
 
     def compose(self) -> ComposeResult:
         """Compose the story-list screen."""
         yield Header()
+        if self.show_banner:
+            yield Static(render_startup_banner(), id="startup-banner")
         yield Static("Loading...", id="status")
         yield ListView(id="stories")
         yield Footer()
 
     async def on_mount(self) -> None:
         """Load the initial story set once the screen is ready."""
+        self._sync_banner_visibility()
         await self.load_stories()
+
+    def on_resize(self, _event: events.Resize) -> None:
+        """Hide the banner before it can wrap or crowd small terminals."""
+        self._sync_banner_visibility()
 
     async def action_refresh(self) -> None:
         """Refresh stories, bypassing the item cache."""
@@ -723,7 +745,12 @@ class StoryListScreen(Screen[None]):
     async def _handle_search_query(self, query: str | None) -> None:
         """Open search results after the modal submits a non-empty query."""
         if query:
-            await self.app.push_screen(StoryListScreen(search_query=query))
+            await self.app.push_screen(
+                StoryListScreen(
+                    search_query=query,
+                    show_banner=self.hews_app.show_banner,
+                )
+            )
 
     def action_back(self) -> None:
         """Return from search results, or exit when search is the only screen."""
@@ -751,6 +778,17 @@ class StoryListScreen(Screen[None]):
         if "logged in" not in current and not current.startswith("Error "):
             status.update(f"{current} - logged in")
 
+    def _sync_banner_visibility(self) -> None:
+        """Keep the logo opt-in only when the pane can display it cleanly."""
+        if not self.show_banner:
+            return
+
+        banner = self.query_one("#startup-banner", Static)
+        banner.display = (
+            self.size.width >= MIN_BANNER_SCREEN_WIDTH
+            and self.size.height >= MIN_BANNER_SCREEN_HEIGHT
+        )
+
     @property
     def hews_app(self) -> "HewsApp":
         """Return the concrete Hews app instance for typed access."""
@@ -769,11 +807,13 @@ class HewsApp(App[None]):
         initial_section: Optional[str] = None,
         initial_search: Optional[str] = None,
         hn_client: Optional[HNClient] = None,
+        show_banner: bool = True,
     ) -> None:
         super().__init__()
         self.initial_section = initial_section or "top"
         self.initial_search = initial_search
         self.hn_client = hn_client or HNClient()
+        self.show_banner = show_banner
         self._owns_client = hn_client is None
         self._login_task: asyncio.Task[None] | None = None
         self.is_authenticated = False
@@ -791,6 +831,7 @@ class HewsApp(App[None]):
             StoryListScreen(
                 section=self.initial_section,
                 search_query=self.initial_search,
+                show_banner=self.show_banner,
             )
         )
 
@@ -833,6 +874,19 @@ def _short_domain(url: str | None) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def render_startup_banner() -> Text:
+    """Return the startup logo with scoped Rich spans and fixed-width rows."""
+    banner = Text(no_wrap=True, overflow="crop")
+    for index, line in enumerate(HEWS_BANNER_LINES):
+        if index > 0:
+            banner.append("\n")
+        banner.append(line[:10], style="bold #ff6600")
+        banner.append(line[10:26], style="bold white")
+        banner.append(line[26:], style="bold #ff6600")
+    banner.append("\n  Hacker News, distilled.", style="italic bright_black")
+    return banner
 
 
 def html_to_plain_text(html: str) -> str:

@@ -167,15 +167,22 @@ async def run_print_mode(section: Optional[str], search: Optional[str]) -> None:
 
 
 def launch_tui(
-    initial_section: Optional[str] = None, initial_search: Optional[str] = None
+    initial_section: Optional[str] = None,
+    initial_search: Optional[str] = None,
+    show_banner: bool = True,
 ) -> None:
     """Launch the Textual TUI application.
 
     Args:
         initial_section: Initial section to display
         initial_search: Initial search query to execute
+        show_banner: Whether to show the startup ASCII banner
     """
-    HewsApp(initial_section=initial_section, initial_search=initial_search).run()
+    HewsApp(
+        initial_section=initial_section,
+        initial_search=initial_search,
+        show_banner=show_banner,
+    ).run()
 
 
 @click.command()
@@ -198,12 +205,23 @@ def launch_tui(
     is_flag=True,
     help="Print stories to stdout instead of launching TUI",
 )
+@click.option(
+    "--no-banner",
+    is_flag=True,
+    help="Disable the startup ASCII banner in TUI mode; also honored by HEWS_NO_BANNER=1",
+)
 @click.version_option(package_name="hews")
-def cli(section: Optional[str], search: Optional[str], print_mode: bool) -> None:
+def cli(
+    section: Optional[str],
+    search: Optional[str],
+    print_mode: bool,
+    no_banner: bool,
+) -> None:
     """Hews - A terminal-based Hacker News browser, searcher, and reader.
 
     When run without options, launches the interactive TUI.
     Use --print with --section or --search to output stories to stdout.
+    Use --no-banner or HEWS_NO_BANNER=1 to launch the TUI quietly.
     --section and --search are mutually exclusive.
 
     Examples:
@@ -228,7 +246,12 @@ def cli(section: Optional[str], search: Optional[str], print_mode: bool) -> None
     if print_mode:
         asyncio.run(run_print_mode(section, search))
     else:
-        launch_tui(initial_section=section, initial_search=search)
+        hide_banner = no_banner or os.environ.get("HEWS_NO_BANNER") == "1"
+        launch_tui(
+            initial_section=section,
+            initial_search=search,
+            show_banner=not hide_banner,
+        )
 
 
 def main() -> None:

@@ -12,6 +12,8 @@ from hews.models import Comment, ItemType, Story
 from hews.tui import (
     CommentListItem,
     CommentsScreen,
+    HEWS_BANNER_LINES,
+    HEWS_BANNER_WIDTH,
     HelpScreen,
     HewsApp,
     ReplyDialog,
@@ -19,6 +21,7 @@ from hews.tui import (
     StoryListItem,
     StoryListScreen,
     html_to_plain_text,
+    render_startup_banner,
 )
 
 
@@ -50,6 +53,17 @@ def fake_client(tui_stories: list[Story]) -> AsyncMock:
     return client
 
 
+def test_startup_banner_is_fixed_width_ascii_art() -> None:
+    """The startup logo has stable ASCII rows for clean terminal rendering."""
+    assert all(line.isascii() for line in HEWS_BANNER_LINES)
+    assert {len(line) for line in HEWS_BANNER_LINES} == {HEWS_BANNER_WIDTH}
+
+    rendered = render_startup_banner()
+    assert rendered.plain.startswith(HEWS_BANNER_LINES[0])
+    assert "Hacker News, distilled." in rendered.plain
+    assert "\x1b" not in rendered.plain
+
+
 @pytest.mark.asyncio
 async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> None:
     """The app pushes a story-list screen for top stories by default."""
@@ -60,6 +74,7 @@ async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> N
         assert isinstance(screen, StoryListScreen)
         assert screen.section == "top"
         assert screen.search_query is None
+        assert screen.query_one("#startup-banner", Static).display is True
 
         status = screen.query_one("#status", Static)
         list_view = screen.query_one("#stories", ListView)
@@ -75,6 +90,28 @@ async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> N
         fake_client.search.assert_not_called()
 
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tui_can_start_without_banner(fake_client: AsyncMock) -> None:
+    """The startup banner can be disabled for quiet TUI launches."""
+    app = HewsApp(hn_client=fake_client, show_banner=False)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        assert len(screen.query("#startup-banner")) == 0
+
+
+@pytest.mark.asyncio
+async def test_tui_hides_banner_on_small_terminal(fake_client: AsyncMock) -> None:
+    """Narrow panes hide the banner instead of wrapping the ASCII art."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test(size=(36, 12)):
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        assert screen.query_one("#startup-banner", Static).display is False
 
 
 @pytest.mark.asyncio

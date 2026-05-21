@@ -15,6 +15,7 @@ run_case() {
   shux session kill "$name" >/dev/null 2>&1 || true
   shux session create "$name" -d -- "$command" >/dev/null
   shux pane wait-for -s "$name" --text "$wait_text" --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "Hacker News, distilled." --timeout-ms 15000
 
   shux --format json pane capture -s "$name" > ".shux/out/${name}-capture.json"
   shux --format json pane snapshot -s "$name" \
@@ -67,7 +68,7 @@ run_case() {
   shux pane send-keys -s "$name" --data "G1tE"
   shux pane wait-for -s "$name" --text "(ask)" --timeout-ms 15000
   shux pane send-keys -s "$name" --text "?"
-  shux pane wait-for -s "$name" --text "Upvote: u | Comment: c" --timeout-ms 15000
+  shux pane wait-for -s "$name" --text "Hews keyboard help" --timeout-ms 15000
   shux --format json pane snapshot -s "$name" \
     | jq -r .png_base64 \
     | base64 -d > ".shux/out/${name}-help.png"

@@ -51,6 +51,7 @@ def test_cli_help(runner):
     assert "--section" in result.output
     assert "--search" in result.output
     assert "--print" in result.output
+    assert "--no-banner" in result.output
     normalized_output = " ".join(result.output.split())
     assert "--section and --search are mutually exclusive" in normalized_output
     assert "exclusive" in result.output
@@ -70,7 +71,11 @@ def test_cli_no_args_launches_tui(runner):
         result = runner.invoke(cli, [])
 
     assert result.exit_code == 0
-    mock_app.assert_called_once_with(initial_section=None, initial_search=None)
+    mock_app.assert_called_once_with(
+        initial_section=None,
+        initial_search=None,
+        show_banner=True,
+    )
     mock_app.return_value.run.assert_called_once_with()
 
 
@@ -80,7 +85,11 @@ def test_cli_section_without_print_launches_tui(runner):
         result = runner.invoke(cli, ["--section", "top"])
 
     assert result.exit_code == 0
-    mock_app.assert_called_once_with(initial_section="top", initial_search=None)
+    mock_app.assert_called_once_with(
+        initial_section="top",
+        initial_search=None,
+        show_banner=True,
+    )
     mock_app.return_value.run.assert_called_once_with()
 
 
@@ -90,7 +99,40 @@ def test_cli_search_without_print_launches_tui(runner):
         result = runner.invoke(cli, ["--search", "python"])
 
     assert result.exit_code == 0
-    mock_app.assert_called_once_with(initial_section=None, initial_search="python")
+    mock_app.assert_called_once_with(
+        initial_section=None,
+        initial_search="python",
+        show_banner=True,
+    )
+    mock_app.return_value.run.assert_called_once_with()
+
+
+def test_cli_no_banner_disables_tui_banner(runner):
+    """The quiet flag launches the TUI without the startup banner."""
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, ["--no-banner"])
+
+    assert result.exit_code == 0
+    mock_app.assert_called_once_with(
+        initial_section=None,
+        initial_search=None,
+        show_banner=False,
+    )
+    mock_app.return_value.run.assert_called_once_with()
+
+
+def test_cli_no_banner_env_disables_tui_banner(runner, monkeypatch):
+    """The environment quiet switch launches the TUI without the startup banner."""
+    monkeypatch.setenv("HEWS_NO_BANNER", "1")
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, [])
+
+    assert result.exit_code == 0
+    mock_app.assert_called_once_with(
+        initial_section=None,
+        initial_search=None,
+        show_banner=False,
+    )
     mock_app.return_value.run.assert_called_once_with()
 
 
