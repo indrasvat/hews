@@ -10,6 +10,15 @@ Screen {
     color: $text;
 }
 
+#startup-banner {
+    dock: top;
+    height: auto;
+    padding: 1 2 0 2;
+    background: $surface;
+    content-align: center middle;
+    text-wrap: nowrap;
+}
+
 #stories {
     height: 1fr;
 }
