@@ -220,6 +220,53 @@ class ReplyDialog(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class HelpScreen(ModalScreen[None]):
+    """Modal reference for Hews keyboard shortcuts."""
+
+    BINDINGS = [
+        Binding("?", "close_help", "Close", priority=True),
+        Binding("escape", "close_help", "Close", priority=True),
+        Binding("q", "close_help", "Close", priority=True),
+    ]
+
+    HELP_TEXT = """Hews keyboard help
+
+Navigation
+  Up/Down or j/k        Move selection
+  Enter or Right        Open story, expand/collapse comment thread
+  Left, Esc, or b       Go back
+  q                     Quit app
+
+Sections
+  t                     Top stories
+  n                     New stories
+  a                     Ask HN
+  s                     Show HN
+  Shift+j               Jobs
+  r                     Refresh current section
+
+Search
+  /                     Search stories
+  Esc                   Cancel search prompt
+
+Interactions
+  u                     Upvote selected story/comment (login required)
+  c                     Comment on selected story/comment (login required)
+
+Help
+  ?                     Open or close this help
+  Esc or q              Close this help
+"""
+
+    def compose(self) -> ComposeResult:
+        """Compose the help dialog."""
+        yield Static(self.HELP_TEXT, id="help-content")
+
+    def action_close_help(self) -> None:
+        """Close the help dialog."""
+        self.dismiss(None)
+
+
 class CommentsScreen(Screen[None]):
     """Story-detail screen with a nested Hacker News comment thread."""
 
@@ -715,7 +762,7 @@ class HewsApp(App[None]):
 
     CSS_PATH = "hews.tcss"
     TITLE = "Hews - Hacker News TUI"
-    BINDINGS = [("?", "help", "Help"), ("q", "quit", "Quit")]
+    BINDINGS = [Binding("?", "help", "Help"), Binding("q", "quit", "Quit")]
 
     def __init__(
         self,
@@ -773,13 +820,9 @@ class HewsApp(App[None]):
         if isinstance(active_screen, StoryListScreen):
             active_screen.show_authenticated_status()
 
-    def action_help(self) -> None:
-        """Show the most important keyboard shortcuts."""
-        self.notify(
-            "Open: Enter/Right | Back: Esc/Left | Move: j/k | Refresh: r | "
-            "Search: / | Upvote: u | Comment: c",
-            title="Hews",
-        )
+    async def action_help(self) -> None:
+        """Show the keyboard shortcut reference."""
+        await self.push_screen(HelpScreen())
 
 
 def _short_domain(url: str | None) -> str:

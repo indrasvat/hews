@@ -91,6 +91,22 @@ ReplyDialog {
     background: $background 60%;
 }
 
+HelpScreen {
+    align: center middle;
+    background: $background 70%;
+}
+
+#help-content {
+    width: 86;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    background: $surface;
+    color: $text;
+    border: round $accent;
+}
+
 #search-title {
     width: 60;
     padding: 1 2 0 2;
