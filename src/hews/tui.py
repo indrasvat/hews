@@ -748,7 +748,7 @@ class StoryListScreen(Screen[None]):
             await self.app.push_screen(
                 StoryListScreen(
                     search_query=query,
-                    show_banner=self.hews_app.show_banner,
+                    show_banner=False,
                 )
             )
 

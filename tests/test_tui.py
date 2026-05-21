@@ -143,6 +143,7 @@ async def test_tui_starts_on_search_results_when_query_is_supplied(
         screen = app.screen
         assert isinstance(screen, StoryListScreen)
         assert screen.search_query == "python"
+        assert screen.query_one("#startup-banner", Static).display is True
 
         status = screen.query_one("#status", Static)
         assert str(status.renderable) == "Search results for 'python'"
@@ -830,6 +831,7 @@ async def test_story_list_search_dialog_pushes_results_screen(
         screen = app.screen
         assert isinstance(screen, StoryListScreen)
         assert screen.search_query == "database"
+        assert len(screen.query("#startup-banner")) == 0
         status = screen.query_one("#status", Static)
         assert str(status.renderable) == "Search results for 'database'"
 
