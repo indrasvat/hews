@@ -170,6 +170,7 @@ def launch_tui(
     initial_section: Optional[str] = None,
     initial_search: Optional[str] = None,
     show_banner: bool = True,
+    theme: Optional[str] = None,
 ) -> None:
     """Launch the Textual TUI application.
 
@@ -177,11 +178,13 @@ def launch_tui(
         initial_section: Initial section to display
         initial_search: Initial search query to execute
         show_banner: Whether to show the startup ASCII banner
+        theme: Visual theme name, defaulting to HEWS_THEME or dark
     """
     HewsApp(
         initial_section=initial_section,
         initial_search=initial_search,
         show_banner=show_banner,
+        theme=theme,
     ).run()
 
 
@@ -210,18 +213,25 @@ def launch_tui(
     is_flag=True,
     help="Disable the startup ASCII banner in TUI mode; also honored by HEWS_NO_BANNER=1",
 )
+@click.option(
+    "--theme",
+    type=click.Choice(["dark", "light"], case_sensitive=False),
+    help="TUI theme; also honored by HEWS_THEME=dark|light",
+)
 @click.version_option(package_name="hews")
 def cli(
     section: Optional[str],
     search: Optional[str],
     print_mode: bool,
     no_banner: bool,
+    theme: Optional[str],
 ) -> None:
     """Hews - A terminal-based Hacker News browser, searcher, and reader.
 
     When run without options, launches the interactive TUI.
     Use --print with --section or --search to output stories to stdout.
     Use --no-banner or HEWS_NO_BANNER=1 to launch the TUI quietly.
+    Use --theme or HEWS_THEME=dark|light to choose the TUI palette.
     --section and --search are mutually exclusive.
 
     Examples:
@@ -251,6 +261,7 @@ def cli(
             initial_section=section,
             initial_search=search,
             show_banner=not hide_banner,
+            theme=theme,
         )
 
 

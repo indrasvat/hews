@@ -11,6 +11,7 @@ from textual.widgets import Input, ListView, Static
 from hews.models import Comment, ItemType, Story
 from hews.tui import (
     CommentListItem,
+    CommentNode,
     CommentsScreen,
     HEWS_BANNER_LINES,
     HEWS_BANNER_WIDTH,
@@ -22,6 +23,7 @@ from hews.tui import (
     StoryListScreen,
     html_to_plain_text,
     render_startup_banner,
+    resolve_theme,
 )
 
 
@@ -64,6 +66,17 @@ def test_startup_banner_is_fixed_width_ascii_art() -> None:
     assert "\x1b" not in rendered.plain
 
 
+def test_resolve_theme_uses_explicit_or_env_theme(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Theme selection defaults to dark and accepts light from args or env."""
+    monkeypatch.delenv("HEWS_THEME", raising=False)
+    assert resolve_theme(None) == "dark"
+    assert resolve_theme("light") == "light"
+    assert resolve_theme("unknown") == "dark"
+
+    monkeypatch.setenv("HEWS_THEME", "light")
+    assert resolve_theme(None) == "light"
+
+
 @pytest.mark.asyncio
 async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> None:
     """The app pushes a story-list screen for top stories by default."""
@@ -90,6 +103,16 @@ async def test_tui_starts_on_top_stories_by_default(fake_client: AsyncMock) -> N
         fake_client.search.assert_not_called()
 
         await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tui_applies_configured_theme_class(fake_client: AsyncMock) -> None:
+    """The app exposes a stable theme class for stylesheet variants."""
+    app = HewsApp(hn_client=fake_client, theme="light")
+
+    async with app.run_test():
+        assert app.hews_theme == "light"
+        assert app.has_class("theme-light")
 
 
 @pytest.mark.asyncio
@@ -374,9 +397,45 @@ async def test_comments_screen_loads_story_and_nested_comments() -> None:
         assert isinstance(op_comment, CommentListItem)
         assert first.depth == 0
         assert nested.depth == 1
+        assert first.has_class("comment-depth-0")
+        assert nested.has_class("comment-depth-1")
+        assert op_comment.has_class("comment-op")
         assert first._metadata_text().startswith("[-] bob")
         assert not nested._metadata_text().startswith(("[+]", "[-]"))
         assert op_comment._metadata_text().startswith("alice [OP]")
+
+
+def test_comment_list_item_marks_deleted_and_dead_states() -> None:
+    """Special comment states get stable classes for visual treatment."""
+    deleted = CommentListItem(
+        CommentNode(
+            Comment(
+                id=1,
+                type=ItemType.COMMENT,
+                deleted=True,
+            ),
+            replies=[],
+        ),
+        depth=0,
+        story_author="alice",
+    )
+    dead = CommentListItem(
+        CommentNode(
+            Comment(
+                id=2,
+                type=ItemType.COMMENT,
+                dead=True,
+            ),
+            replies=[],
+        ),
+        depth=0,
+        story_author="alice",
+    )
+
+    assert deleted.has_class("comment-deleted")
+    assert deleted._body_text() == "[deleted]"
+    assert dead.has_class("comment-dead")
+    assert dead._body_text() == "[dead]"
 
 
 @pytest.mark.asyncio

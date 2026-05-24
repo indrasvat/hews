@@ -150,12 +150,28 @@ class CommentListItem(ListItem):
         self.depth = depth
         self.story_author = story_author
         self.collapsed = collapsed
+        comment = node.comment
+        self.add_class(f"comment-depth-{min(depth, 3)}")
+        if comment.by == story_author:
+            self.add_class("comment-op")
+        if comment.deleted:
+            self.add_class("comment-deleted")
+        if comment.dead:
+            self.add_class("comment-dead")
+        if node.local_by_user:
+            self.add_class("comment-local")
 
     def compose(self) -> ComposeResult:
         """Render comment metadata and body."""
         self.styles.padding = (0, 1, 0, min(self.depth * 4, 24))
-        yield Label(self._metadata_text(), classes="comment-meta")
-        yield Static(self._body_text(), classes="comment-body")
+        meta_classes = "comment-meta"
+        body_classes = "comment-body"
+        if self.node.comment.by == self.story_author:
+            meta_classes = f"{meta_classes} comment-op-meta"
+        if self.node.comment.deleted or self.node.comment.dead:
+            body_classes = f"{body_classes} comment-muted-body"
+        yield Label(self._metadata_text(), classes=meta_classes)
+        yield Static(self._body_text(), classes=body_classes)
 
     def _metadata_text(self) -> str:
         comment = self.node.comment
@@ -808,12 +824,14 @@ class HewsApp(App[None]):
         initial_search: Optional[str] = None,
         hn_client: Optional[HNClient] = None,
         show_banner: bool = True,
+        theme: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.initial_section = initial_section or "top"
         self.initial_search = initial_search
         self.hn_client = hn_client or HNClient()
         self.show_banner = show_banner
+        self.hews_theme = resolve_theme(theme)
         self._owns_client = hn_client is None
         self._login_task: asyncio.Task[None] | None = None
         self.is_authenticated = False
@@ -821,6 +839,7 @@ class HewsApp(App[None]):
     async def on_mount(self) -> None:
         """Open the API client, start login if configured, and show the first view."""
         self.title = self.TITLE
+        self.add_class(f"theme-{self.hews_theme}")
         if self._owns_client:
             await self.hn_client.__aenter__()
 
@@ -874,6 +893,12 @@ def _short_domain(url: str | None) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def resolve_theme(theme: str | None) -> str:
+    """Return the configured visual theme name."""
+    requested = (theme or os.environ.get("HEWS_THEME") or "dark").strip().lower()
+    return requested if requested in {"dark", "light"} else "dark"
 
 
 def render_startup_banner() -> Text:
