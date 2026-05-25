@@ -20,6 +20,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from hews import HNClient, Comment, Story
+from hews.client import HNClientError
 from hews.models import ItemType
 
 HEWS_BANNER_LINES = (
@@ -332,9 +333,9 @@ class CommentsScreen(Screen[None]):
 
         try:
             self.comment_nodes = await self._fetch_comment_nodes(self.story.kids)
-        except Exception as exc:
-            status.update(f"Error loading comments: {exc}")
-            logger.debug("Failed to load comments for story {}: {}", self.story.id, exc)
+        except Exception:
+            status.update("Error: Unable to load comments.")
+            logger.exception("Failed to load comments for story {}", self.story.id)
             return
 
         flattened = list(self._visible_comments())
@@ -386,6 +387,10 @@ class CommentsScreen(Screen[None]):
         """Upvote the selected comment, or the story when no comment is selected."""
         if self._interaction_in_progress:
             return
+        if self.hews_app.is_offline:
+            self._show_action_status("Cannot vote while offline.")
+            self.app.notify("Cannot vote while offline.", title="Hews")
+            return
         if not self.hews_app.is_authenticated:
             self._show_action_status("Login required to upvote.")
             self.app.notify("Login required to upvote.", title="Hews")
@@ -416,6 +421,10 @@ class CommentsScreen(Screen[None]):
     async def action_comment_selected(self) -> None:
         """Open a reply prompt for the selected comment or story."""
         if self._interaction_in_progress:
+            return
+        if self.hews_app.is_offline:
+            self._show_action_status("Cannot comment while offline.")
+            self.app.notify("Cannot comment while offline.", title="Hews")
             return
         if not self.hews_app.is_authenticated:
             self._show_action_status("Login required to comment.")
@@ -653,6 +662,9 @@ class StoryListScreen(Screen[None]):
 
     async def action_refresh(self) -> None:
         """Refresh stories, bypassing the item cache."""
+        if self.hews_app.is_offline:
+            self._show_network_unavailable()
+            return
         await self.load_stories(force_refresh=True)
 
     async def load_stories(self, force_refresh: bool = False) -> None:
@@ -681,8 +693,8 @@ class StoryListScreen(Screen[None]):
                 )
         except Exception as exc:
             if self._load_id is load_id:
-                status.update(f"Error loading stories: {exc}")
-                logger.debug("Failed to load TUI stories: {}", exc)
+                status.update(self._friendly_load_error(exc))
+                logger.exception("Failed to load TUI stories")
             return
 
         if self._load_id is not load_id:
@@ -690,6 +702,9 @@ class StoryListScreen(Screen[None]):
 
         self.stories = stories
         await self.display_stories(stories)
+        if self.hews_app.is_offline and stories:
+            status.update("Network unavailable - showing cached data [offline]")
+            return
         if not stories:
             if self.search_query:
                 status.update(f"No results found for '{self.search_query}'")
@@ -740,6 +755,9 @@ class StoryListScreen(Screen[None]):
 
     async def action_search(self) -> None:
         """Prompt for a query and push a search-results screen."""
+        if self.hews_app.is_offline:
+            self._show_network_unavailable()
+            return
         await self.app.push_screen(SearchDialog(), self._handle_search_query)
 
     async def _handle_search_query(self, query: str | None) -> None:
@@ -777,6 +795,20 @@ class StoryListScreen(Screen[None]):
         current = str(status.renderable)
         if "logged in" not in current and not current.startswith("Error "):
             status.update(f"{current} - logged in")
+
+    def _friendly_load_error(self, exc: Exception) -> str:
+        """Return short, user-facing load failure text."""
+        if self.search_query:
+            return "Error: Unable to retrieve search results."
+        if self.hews_app.is_offline or isinstance(exc, HNClientError):
+            return "Network unavailable - unable to load stories."
+        return "Error: Unable to load stories."
+
+    def _show_network_unavailable(self) -> None:
+        """Tell the user that the requested action needs the network."""
+        message = "Cannot fetch new data while offline."
+        self.query_one("#status", Static).update(message)
+        self.app.notify(message, title="Hews")
 
     def _sync_banner_visibility(self) -> None:
         """Keep the logo opt-in only when the pane can display it cleanly."""
@@ -860,6 +892,11 @@ class HewsApp(App[None]):
         active_screen = self.screen
         if isinstance(active_screen, StoryListScreen):
             active_screen.show_authenticated_status()
+
+    @property
+    def is_offline(self) -> bool:
+        """Return whether the client most recently hit a network failure."""
+        return getattr(self.hn_client, "is_offline", False) is True
 
     async def action_help(self) -> None:
         """Show the keyboard shortcut reference."""

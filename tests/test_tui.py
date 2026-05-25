@@ -234,7 +234,52 @@ async def test_tui_refresh_error_clears_stale_story_state(
         status = screen.query_one("#status", Static)
         assert screen.stories == []
         assert len(list_view.children) == 0
-        assert str(status.renderable) == "Error loading stories: offline"
+        assert str(status.renderable) == "Error: Unable to load stories."
+
+
+@pytest.mark.asyncio
+async def test_tui_offline_start_shows_cached_data_status(
+    fake_client: AsyncMock,
+) -> None:
+    """Cached stories remain browsable when the initial fetch detects offline mode."""
+    fake_client.is_offline = True
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        status = screen.query_one("#status", Static)
+        list_view = screen.query_one("#stories", ListView)
+
+        assert str(status.renderable) == (
+            "Network unavailable - showing cached data [offline]"
+        )
+        assert len(list_view.children) == 1
+
+
+@pytest.mark.asyncio
+async def test_tui_offline_refresh_and_search_are_blocked(
+    fake_client: AsyncMock,
+) -> None:
+    """Known offline mode prevents actions that must fetch fresh data."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        fake_client.is_offline = True
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("/")
+        await pilot.pause()
+
+        status = screen.query_one("#status", Static)
+        assert str(status.renderable) == "Cannot fetch new data while offline."
+        assert app.screen is screen
+
+    assert fake_client.fetch_stories.await_count == 1
+    fake_client.search.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -596,6 +641,42 @@ async def test_comments_screen_upvote_requires_login() -> None:
         assert str(status.renderable) == "Login required to upvote."
 
     client.upvote.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_blocks_write_actions_while_offline() -> None:
+    """Offline mode prevents voting and replying even when a login is present."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[],
+    )
+    client = AsyncMock()
+    client.is_offline = True
+    app = HewsApp(hn_client=client)
+    app.is_authenticated = True
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("u")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Cannot vote while offline."
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert app.screen is screen
+        assert str(status.renderable) == "Cannot comment while offline."
+
+    client.upvote.assert_not_called()
+    client.post_comment.assert_not_called()
 
 
 @pytest.mark.asyncio
