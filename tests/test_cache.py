@@ -34,6 +34,33 @@ def test_save_and_get_story(tmp_path: Path) -> None:
     assert cached.kids == story.kids
 
 
+def test_get_item_returns_none_for_missing_item(tmp_path: Path) -> None:
+    """CacheManager returns None when an item has not been cached."""
+
+    cache = CacheManager(tmp_path / "cache.db")
+
+    assert cache.get_item(404) is None
+
+
+def test_save_item_updates_existing_row(tmp_path: Path) -> None:
+    """Saving the same item ID twice replaces the cached payload."""
+
+    cache_path = tmp_path / "cache.db"
+    cache = CacheManager(cache_path)
+
+    cache.save_item(Story(id=123, type=ItemType.STORY, title="First", score=1))
+    cache.save_item(Story(id=123, type=ItemType.STORY, title="Updated", score=2))
+
+    cached = cache.get_item(123)
+
+    assert isinstance(cached, Story)
+    assert cached.title == "Updated"
+    assert cached.score == 2
+    with sqlite3.connect(cache_path) as conn:
+        row_count = conn.execute("SELECT COUNT(*) FROM items WHERE id = 123").fetchone()
+    assert row_count == (1,)
+
+
 def test_save_and_get_comment(tmp_path: Path) -> None:
     """CacheManager saves and restores comment data."""
 
@@ -93,3 +120,14 @@ def test_save_and_get_section_story_ids(tmp_path: Path) -> None:
 
     assert cache.get_story_ids("top") == [123, 456, 789]
     assert cache.get_story_ids("new") == []
+
+
+def test_save_story_ids_replaces_existing_section(tmp_path: Path) -> None:
+    """Section story ID saves replace the previous ordered list."""
+
+    cache = CacheManager(tmp_path / "cache.db")
+
+    cache.save_story_ids("top", [123, 456, 789])
+    cache.save_story_ids("top", [999])
+
+    assert cache.get_story_ids("top") == [999]

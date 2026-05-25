@@ -53,10 +53,41 @@ def test_story_from_json():
     assert story.descendants == 2
 
 
+def test_story_from_json_defaults_optional_fields():
+    story = Story.from_hn_json({"id": 999})
+
+    assert story.id == 999
+    assert story.type == ItemType.STORY
+    assert story.by is None
+    assert story.kids == []
+    assert story.dead is False
+    assert story.deleted is False
+    assert story.title is None
+    assert story.score is None
+    assert story.time.tzinfo == dt.timezone.utc
+
+
 def test_comment_from_json():
     comment = Comment.from_hn_json(COMMENT_JSON)
     assert comment.parent == 123
     assert comment.type == ItemType.COMMENT
+
+
+def test_comment_from_json_preserves_state_flags():
+    comment = Comment.from_hn_json(
+        {
+            "id": 456,
+            "type": "comment",
+            "parent": 123,
+            "dead": True,
+            "deleted": True,
+        }
+    )
+
+    assert comment.parent == 123
+    assert comment.dead is True
+    assert comment.deleted is True
+    assert comment.kids == []
 
 
 def test_item_from_json_helper():
