@@ -121,6 +121,19 @@ class TestHNClient:
         mock_client._http_client.get.assert_any_call("/item/123.json")
 
     @pytest.mark.asyncio
+    async def test_fetch_stories_empty_id_list_returns_empty(self, mock_client):
+        """An empty HN section response returns no stories or item requests."""
+        ids_response = Mock()
+        ids_response.json.return_value = []
+        ids_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = ids_response
+
+        stories = await mock_client.fetch_stories("top", limit=3)
+
+        assert stories == []
+        mock_client._http_client.get.assert_called_once_with("/topstories.json")
+
+    @pytest.mark.asyncio
     async def test_fetch_stories_uses_cached_story_details(self, mock_client):
         """Fresh cached story details avoid per-item network calls."""
         story = Story(
