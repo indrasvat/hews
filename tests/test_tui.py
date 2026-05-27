@@ -429,7 +429,9 @@ async def test_comments_screen_loads_story_and_nested_comments() -> None:
         comments_view = screen.query_one("#comments", ListView)
         assert len(comments_view.children) == 3
         assert comments_view.index == 0
-        assert all(isinstance(child, CommentListItem) for child in comments_view.children)
+        assert all(
+            isinstance(child, CommentListItem) for child in comments_view.children
+        )
 
         first, nested, op_comment = comments_view.children
         assert isinstance(first, CommentListItem)
@@ -837,7 +839,9 @@ async def test_story_list_section_shortcut_loads_new_section(
         assert screen.search_query is None
 
     assert fake_client.fetch_stories.await_args_list[-1].args == ("ask",)
-    assert fake_client.fetch_stories.await_args_list[-1].kwargs["force_refresh"] is False
+    assert (
+        fake_client.fetch_stories.await_args_list[-1].kwargs["force_refresh"] is False
+    )
 
 
 @pytest.mark.asyncio

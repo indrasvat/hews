@@ -29,9 +29,7 @@ class _HiddenInputParser(HTMLParser):
         self._current_form: tuple[Dict[str, str], set[str]] | None = None
         self.values: Dict[str, str] = {}
 
-    def handle_startendtag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -252,9 +250,7 @@ class HNClient:
 
             story_ids = response.json()
             if not isinstance(story_ids, list):
-                raise HNClientError(
-                    f"Unexpected response fetching {section} stories"
-                )
+                raise HNClientError(f"Unexpected response fetching {section} stories")
             if not story_ids:
                 return []
 
