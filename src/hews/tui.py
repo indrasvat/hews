@@ -602,10 +602,7 @@ class CommentsScreen(Screen[None]):
         domain = _short_domain(self.story.url)
         if domain:
             title = f"{title} ({domain})"
-        return (
-            f"{title}\n"
-            f"{score} points by {author} | {comments} comments | {age}"
-        )
+        return f"{title}\n{score} points by {author} | {comments} comments | {age}"
 
 
 class StoryListScreen(Screen[None]):

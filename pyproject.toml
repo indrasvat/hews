@@ -36,6 +36,7 @@ dependencies = [
 dev = [
     "pytest>=8.3.5",
     "pytest-asyncio>=0.26.0",
+    "pytest-cov>=6.0.0",
     "pytest-sugar>=1.0.0",
     "ruff>=0.11.7",
     "textual-dev>=1.7.0",
@@ -65,6 +66,20 @@ packages = ["src/hews", "src/logger_setup"]
 vcs = "git"
 style = "semver"
 pattern = "default-unprefixed"
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+source_pkgs = ["hews"]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == \"__main__\":",
+]
 
 [tool.mypy]
 python_version = "3.12"
