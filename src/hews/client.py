@@ -189,6 +189,8 @@ class HNClient:
         self._owned_client = http_client is None
         self._cache_manager = cache_manager or CacheManager()
         self.is_authenticated = False
+        self.is_offline = False
+        self.last_response_from_cache = False
 
     async def __aenter__(self) -> "HNClient":
         """Async context manager entry."""
@@ -241,12 +243,18 @@ class HNClient:
             )
 
         endpoint = self.SECTION_ENDPOINTS[section]
+        self.last_response_from_cache = False
 
         try:
             response = await self._http_client.get(endpoint)
             response.raise_for_status()
+            self.is_offline = False
 
             story_ids = response.json()
+            if not isinstance(story_ids, list):
+                raise HNClientError(
+                    f"Unexpected response fetching {section} stories"
+                )
             if not story_ids:
                 return []
 
@@ -273,7 +281,10 @@ class HNClient:
             logger.debug("Falling back to cached {} stories: {}", section, e)
             cached_stories = self._get_cached_section_stories(section, limit)
             if cached_stories:
+                self.is_offline = True
+                self.last_response_from_cache = True
                 return cached_stories
+            self.is_offline = True
             raise HNClientError(f"Network error fetching {section} stories: {e}") from e
         except Exception as e:
             raise HNClientError(
@@ -299,14 +310,17 @@ class HNClient:
             raise HNClientError("Client not initialized. Use as async context manager.")
 
         cached_item = self._get_cached_item(item_id)
+        self.last_response_from_cache = False
         if not force_refresh:
             fresh_item = self._get_fresh_cached_item(item_id)
             if fresh_item is not None:
+                self.last_response_from_cache = True
                 return fresh_item
 
         try:
             response = await self._http_client.get(f"/item/{item_id}.json")
             response.raise_for_status()
+            self.is_offline = False
 
             item_data = response.json()
             if not item_data:
@@ -333,7 +347,10 @@ class HNClient:
                 logger.debug(
                     "Serving stale cached item {} after network error", item_id
                 )
+                self.is_offline = True
+                self.last_response_from_cache = True
                 return cached_item
+            self.is_offline = True
             raise HNClientError(f"Network error fetching item {item_id}: {e}") from e
         except HNClientError:
             raise
@@ -631,9 +648,14 @@ class HNClient:
             # Make the search request
             response = await self._algolia_client.get("/search", params=params)
             response.raise_for_status()
+            self.is_offline = False
 
             data = response.json()
+            if not isinstance(data, dict):
+                raise HNClientError(f"Unexpected response searching for '{query}'")
             hits = data.get("hits", [])
+            if not isinstance(hits, list):
+                raise HNClientError(f"Unexpected response searching for '{query}'")
 
             # Convert Algolia hits to Story objects
             stories = []
@@ -649,6 +671,7 @@ class HNClient:
                 f"HTTP error searching for '{query}': {e.response.status_code}"
             ) from e
         except httpx.RequestError as e:
+            self.is_offline = True
             raise HNClientError(f"Network error searching for '{query}': {e}") from e
         except Exception as e:
             raise HNClientError(f"Unexpected error searching for '{query}': {e}") from e

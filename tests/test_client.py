@@ -231,6 +231,18 @@ class TestHNClient:
 
         with pytest.raises(HNClientError, match="Network error fetching top stories"):
             await mock_client.fetch_stories("top")
+        assert mock_client.is_offline is True
+
+    @pytest.mark.asyncio
+    async def test_fetch_stories_malformed_ids_error(self, mock_client):
+        """Malformed section responses raise a client error instead of leaking."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"unexpected": "shape"}
+        mock_response.raise_for_status.return_value = None
+        mock_client._http_client.get.return_value = mock_response
+
+        with pytest.raises(HNClientError, match="Unexpected response fetching"):
+            await mock_client.fetch_stories("top")
 
     @pytest.mark.asyncio
     async def test_fetch_item_story_success(self, mock_client):
@@ -906,6 +918,21 @@ class TestHNClient:
         mock_algolia.get.side_effect = httpx.RequestError("Connection failed")
 
         with pytest.raises(HNClientError, match="Network error searching"):
+            await mock_client.search("test")
+        assert mock_client.is_offline is True
+
+    @pytest.mark.asyncio
+    async def test_search_malformed_response_error(self, mock_client):
+        """Malformed Algolia responses raise a client error without crashing."""
+        mock_algolia = AsyncMock(spec=httpx.AsyncClient)
+        mock_client._algolia_client = mock_algolia
+
+        mock_response = Mock()
+        mock_response.json.return_value = {"hits": "not-a-list"}
+        mock_response.raise_for_status.return_value = None
+        mock_algolia.get.return_value = mock_response
+
+        with pytest.raises(HNClientError, match="Unexpected response searching"):
             await mock_client.search("test")
 
     @pytest.mark.asyncio

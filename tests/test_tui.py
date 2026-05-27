@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from textual.widgets import Input, ListView, Static
 
+from hews.client import HNClientError
 from hews.models import Comment, ItemType, Story
 from hews.tui import (
     CommentListItem,
@@ -234,7 +235,69 @@ async def test_tui_refresh_error_clears_stale_story_state(
         status = screen.query_one("#status", Static)
         assert screen.stories == []
         assert len(list_view.children) == 0
-        assert str(status.renderable) == "Error loading stories: offline"
+        assert str(status.renderable) == "Error: Unable to load stories."
+
+
+@pytest.mark.asyncio
+async def test_tui_offline_start_shows_cached_data_status(
+    fake_client: AsyncMock,
+) -> None:
+    """Cached stories remain browsable when the initial fetch detects offline mode."""
+    fake_client.is_offline = True
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+        status = screen.query_one("#status", Static)
+        list_view = screen.query_one("#stories", ListView)
+
+        assert str(status.renderable) == (
+            "Network unavailable - showing cached data [offline]"
+        )
+        assert len(list_view.children) == 1
+
+
+@pytest.mark.asyncio
+async def test_tui_offline_search_is_blocked_but_refresh_can_retry(
+    fake_client: AsyncMock,
+) -> None:
+    """Known offline mode blocks search while refresh can retry the network."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        fake_client.is_offline = True
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        await pilot.press("r")
+        await pilot.pause()
+        assert fake_client.fetch_stories.await_count == 2
+
+        await pilot.press("/")
+        await pilot.pause()
+
+        status = screen.query_one("#status", Static)
+        assert str(status.renderable) == "Cannot fetch new data while offline."
+        assert app.screen is screen
+
+    fake_client.search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tui_client_errors_use_generic_load_message(
+    fake_client: AsyncMock,
+) -> None:
+    """Non-network client failures are not mislabeled as offline."""
+    fake_client.fetch_stories.side_effect = HNClientError("bad response")
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        status = screen.query_one("#status", Static)
+        assert str(status.renderable) == "Error: Unable to load stories."
 
 
 @pytest.mark.asyncio
@@ -596,6 +659,42 @@ async def test_comments_screen_upvote_requires_login() -> None:
         assert str(status.renderable) == "Login required to upvote."
 
     client.upvote.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_comments_screen_blocks_write_actions_while_offline() -> None:
+    """Offline mode prevents voting and replying even when a login is present."""
+    story = Story(
+        id=10,
+        type=ItemType.STORY,
+        title="Ask HN: Testing",
+        kids=[],
+    )
+    client = AsyncMock()
+    client.is_offline = True
+    app = HewsApp(hn_client=client)
+    app.is_authenticated = True
+
+    async with app.run_test() as pilot:
+        await app.push_screen(CommentsScreen(story))
+        await pilot.pause()
+
+        await pilot.press("u")
+        await pilot.pause()
+
+        screen = app.screen
+        assert isinstance(screen, CommentsScreen)
+        status = screen.query_one("#comments-status", Static)
+        assert str(status.renderable) == "Cannot vote while offline."
+
+        await pilot.press("c")
+        await pilot.pause()
+
+        assert app.screen is screen
+        assert str(status.renderable) == "Cannot comment while offline."
+
+    client.upvote.assert_not_called()
+    client.post_comment.assert_not_called()
 
 
 @pytest.mark.asyncio
