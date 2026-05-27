@@ -20,7 +20,6 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from hews import HNClient, Comment, Story
-from hews.client import HNClientError
 from hews.models import ItemType
 
 HEWS_BANNER_LINES = (
@@ -662,9 +661,6 @@ class StoryListScreen(Screen[None]):
 
     async def action_refresh(self) -> None:
         """Refresh stories, bypassing the item cache."""
-        if self.hews_app.is_offline:
-            self._show_network_unavailable()
-            return
         await self.load_stories(force_refresh=True)
 
     async def load_stories(self, force_refresh: bool = False) -> None:
@@ -800,7 +796,7 @@ class StoryListScreen(Screen[None]):
         """Return short, user-facing load failure text."""
         if self.search_query:
             return "Error: Unable to retrieve search results."
-        if self.hews_app.is_offline or isinstance(exc, HNClientError):
+        if self.hews_app.is_offline:
             return "Network unavailable - unable to load stories."
         return "Error: Unable to load stories."
 

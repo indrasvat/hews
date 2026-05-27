@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from textual.widgets import Input, ListView, Static
 
+from hews.client import HNClientError
 from hews.models import Comment, ItemType, Story
 from hews.tui import (
     CommentListItem,
@@ -258,10 +259,10 @@ async def test_tui_offline_start_shows_cached_data_status(
 
 
 @pytest.mark.asyncio
-async def test_tui_offline_refresh_and_search_are_blocked(
+async def test_tui_offline_search_is_blocked_but_refresh_can_retry(
     fake_client: AsyncMock,
 ) -> None:
-    """Known offline mode prevents actions that must fetch fresh data."""
+    """Known offline mode blocks search while refresh can retry the network."""
     app = HewsApp(hn_client=fake_client)
 
     async with app.run_test() as pilot:
@@ -271,6 +272,8 @@ async def test_tui_offline_refresh_and_search_are_blocked(
 
         await pilot.press("r")
         await pilot.pause()
+        assert fake_client.fetch_stories.await_count == 2
+
         await pilot.press("/")
         await pilot.pause()
 
@@ -278,8 +281,23 @@ async def test_tui_offline_refresh_and_search_are_blocked(
         assert str(status.renderable) == "Cannot fetch new data while offline."
         assert app.screen is screen
 
-    assert fake_client.fetch_stories.await_count == 1
     fake_client.search.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tui_client_errors_use_generic_load_message(
+    fake_client: AsyncMock,
+) -> None:
+    """Non-network client failures are not mislabeled as offline."""
+    fake_client.fetch_stories.side_effect = HNClientError("bad response")
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        status = screen.query_one("#status", Static)
+        assert str(status.renderable) == "Error: Unable to load stories."
 
 
 @pytest.mark.asyncio
