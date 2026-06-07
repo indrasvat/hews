@@ -52,6 +52,7 @@ def test_cli_help(runner):
     assert "--search" in result.output
     assert "--print" in result.output
     assert "--no-banner" in result.output
+    assert "--theme" in result.output
     normalized_output = " ".join(result.output.split())
     assert "--section and --search are mutually exclusive" in normalized_output
     assert "exclusive" in result.output
@@ -75,6 +76,7 @@ def test_cli_no_args_launches_tui(runner):
         initial_section=None,
         initial_search=None,
         show_banner=True,
+        theme=None,
     )
     mock_app.return_value.run.assert_called_once_with()
 
@@ -89,6 +91,7 @@ def test_cli_section_without_print_launches_tui(runner):
         initial_section="top",
         initial_search=None,
         show_banner=True,
+        theme=None,
     )
     mock_app.return_value.run.assert_called_once_with()
 
@@ -103,6 +106,7 @@ def test_cli_search_without_print_launches_tui(runner):
         initial_section=None,
         initial_search="python",
         show_banner=True,
+        theme=None,
     )
     mock_app.return_value.run.assert_called_once_with()
 
@@ -117,6 +121,7 @@ def test_cli_no_banner_disables_tui_banner(runner):
         initial_section=None,
         initial_search=None,
         show_banner=False,
+        theme=None,
     )
     mock_app.return_value.run.assert_called_once_with()
 
@@ -132,6 +137,22 @@ def test_cli_no_banner_env_disables_tui_banner(runner, monkeypatch):
         initial_section=None,
         initial_search=None,
         show_banner=False,
+        theme=None,
+    )
+    mock_app.return_value.run.assert_called_once_with()
+
+
+def test_cli_theme_launches_tui_with_requested_theme(runner):
+    """The theme option is forwarded to the TUI."""
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, ["--theme", "light"])
+
+    assert result.exit_code == 0
+    mock_app.assert_called_once_with(
+        initial_section=None,
+        initial_search=None,
+        show_banner=True,
+        theme="light",
     )
     mock_app.return_value.run.assert_called_once_with()
 
