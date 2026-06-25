@@ -4,6 +4,7 @@ Screen {
 
 #status {
     dock: top;
+    width: 100%;
     padding: 0 1;
     height: 1;
     background: $surface;
@@ -12,6 +13,7 @@ Screen {
 
 #startup-banner {
     dock: top;
+    width: 100%;
     height: auto;
     padding: 1 2 0 2;
     background: $surface;
@@ -20,13 +22,20 @@ Screen {
 }
 
 #stories {
+    width: 100%;
     height: 1fr;
 }
 
 StoryListItem {
+    width: 100%;
     height: auto;
     min-height: 3;
     padding: 0 1;
+}
+
+StoryListItem > .story-title,
+StoryListItem > .story-meta {
+    width: 100%;
 }
 
 StoryListItem > .story-title {
@@ -48,29 +57,39 @@ StoryListItem.-highlight > .story-meta {
 }
 
 #story-header {
+    width: 100%;
     padding: 1 2;
     text-style: bold;
     color: $accent;
 }
 
 #story-text {
+    width: 100%;
     padding: 0 2;
     height: auto;
 }
 
 #comments-status {
+    width: 100%;
     padding: 0 2;
     color: $text-muted;
 }
 
 #comments {
+    width: 100%;
     height: 1fr;
 }
 
 CommentListItem {
+    width: 100%;
     height: auto;
     min-height: 3;
     padding: 0 1;
+}
+
+CommentListItem > .comment-meta,
+CommentListItem > .comment-body {
+    width: 100%;
 }
 
 CommentListItem > .comment-meta {

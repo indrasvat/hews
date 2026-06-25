@@ -613,15 +613,15 @@ class StoryListScreen(Screen[None]):
         ("left", "back", "Back"),
         ("b", "back", "Back"),
         ("r", "refresh", "Refresh"),
-        ("j", "cursor_down", "Down"),
-        ("k", "cursor_up", "Up"),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
         Binding("enter", "open_selected", "Open", priority=True),
         Binding("right", "open_selected", "Open", priority=True),
-        ("t", "switch_section('top')", "Top"),
-        ("n", "switch_section('new')", "New"),
-        ("a", "switch_section('ask')", "Ask"),
-        ("s", "switch_section('show')", "Show"),
-        ("J", "switch_section('jobs')", "Jobs"),
+        Binding("t", "switch_section('top')", "Top", show=False),
+        Binding("n", "switch_section('new')", "New", show=False),
+        Binding("a", "switch_section('ask')", "Ask", show=False),
+        Binding("s", "switch_section('show')", "Show", show=False),
+        Binding("J", "switch_section('jobs')", "Jobs", show=False),
         ("/", "search", "Search"),
     ]
 
@@ -637,6 +637,7 @@ class StoryListScreen(Screen[None]):
         self.show_banner = show_banner
         self.stories: list[Story] = []
         self._load_id: object = None
+        self._load_task: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the story-list screen."""
@@ -652,13 +653,20 @@ class StoryListScreen(Screen[None]):
         self._sync_banner_visibility()
         await self.load_stories()
 
+    async def on_unmount(self) -> None:
+        """Cancel any superseded background load before the screen closes."""
+        self._cancel_load_task()
+        if self._load_task:
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._load_task
+
     def on_resize(self, _event: events.Resize) -> None:
         """Hide the banner before it can wrap or crowd small terminals."""
         self._sync_banner_visibility()
 
     async def action_refresh(self) -> None:
         """Refresh stories, bypassing the item cache."""
-        await self.load_stories(force_refresh=True)
+        self._start_load(force_refresh=True)
 
     async def load_stories(self, force_refresh: bool = False) -> None:
         """Fetch and display either search results or a section."""
@@ -744,13 +752,10 @@ class StoryListScreen(Screen[None]):
         """Switch the current list to another Hacker News section."""
         self.section = section
         self.search_query = None
-        await self.load_stories(force_refresh=False)
+        self._start_load(force_refresh=False)
 
     async def action_search(self) -> None:
         """Prompt for a query and push a search-results screen."""
-        if self.hews_app.is_offline:
-            self._show_network_unavailable()
-            return
         await self.app.push_screen(SearchDialog(), self._handle_search_query)
 
     async def _handle_search_query(self, query: str | None) -> None:
@@ -762,6 +767,16 @@ class StoryListScreen(Screen[None]):
                     show_banner=False,
                 )
             )
+
+    def _start_load(self, force_refresh: bool = False) -> None:
+        """Start a story load and cancel any previous in-flight load."""
+        self._cancel_load_task()
+        self._load_task = asyncio.create_task(self.load_stories(force_refresh))
+
+    def _cancel_load_task(self) -> None:
+        """Cancel an in-flight load task when it has not finished yet."""
+        if self._load_task and not self._load_task.done():
+            self._load_task.cancel()
 
     def action_back(self) -> None:
         """Return from search results, or exit when search is the only screen."""
@@ -794,14 +809,8 @@ class StoryListScreen(Screen[None]):
         if self.search_query:
             return "Error: Unable to retrieve search results."
         if self.hews_app.is_offline:
-            return "Network unavailable - unable to load stories."
+            return "Network unavailable and no cached stories found."
         return "Error: Unable to load stories."
-
-    def _show_network_unavailable(self) -> None:
-        """Tell the user that the requested action needs the network."""
-        message = "Cannot fetch new data while offline."
-        self.query_one("#status", Static).update(message)
-        self.app.notify(message, title="Hews")
 
     def _sync_banner_visibility(self) -> None:
         """Keep the logo opt-in only when the pane can display it cleanly."""

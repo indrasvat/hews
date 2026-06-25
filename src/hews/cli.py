@@ -111,6 +111,11 @@ async def search_and_print_stories(client: HNClient, query: str) -> None:
         query: Search query string
     """
     try:
+        query = query.strip()
+        if not query:
+            console.print("[red]Error: --search requires a non-empty query[/red]")
+            sys.exit(1)
+
         console.print(f"\n[bold cyan]Searching for '{query}'...[/bold cyan]\n")
 
         stories = await client.search(query, limit=30)
@@ -242,6 +247,12 @@ def cli(
     if section and search:
         console.print("[red]Error: Cannot use both --section and --search[/red]")
         sys.exit(1)
+
+    if search is not None:
+        search = search.strip()
+        if not search:
+            console.print("[red]Error: --search requires a non-empty query[/red]")
+            sys.exit(1)
 
     if print_mode:
         asyncio.run(run_print_mode(section, search))

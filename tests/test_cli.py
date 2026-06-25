@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from hews import Story
-from hews.cli import cli
+from hews.cli import cli, search_and_print_stories
 from hews.models import ItemType
 
 
@@ -96,7 +96,7 @@ def test_cli_section_without_print_launches_tui(runner):
 def test_cli_search_without_print_launches_tui(runner):
     """Test that --search without --print launches TUI with search."""
     with patch("hews.cli.HewsApp") as mock_app:
-        result = runner.invoke(cli, ["--search", "python"])
+        result = runner.invoke(cli, ["--search", "  python  "])
 
     assert result.exit_code == 0
     mock_app.assert_called_once_with(
@@ -152,6 +152,46 @@ def test_cli_search_with_print(runner):
 
         # Verify search was called
         mock_client.search.assert_called_once_with("python", limit=30)
+
+
+def test_cli_search_with_print_displays_results(runner, mock_stories):
+    """Print-mode search renders non-empty result rows."""
+    with patch("hews.cli.HNClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.search = AsyncMock(return_value=mock_stories)
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        result = runner.invoke(cli, ["--search", "python", "--print"])
+
+    assert result.exit_code == 0
+    assert "Searching for 'python'" in result.output
+    assert "Search Results for 'python'" in result.output
+    assert "Test Story 1" in result.output
+    assert "Found 2 stories" in result.output
+    mock_client.search.assert_called_once_with("python", limit=30)
+
+
+def test_cli_blank_search_errors(runner):
+    """Blank CLI search input is rejected before TUI or network work starts."""
+    with patch("hews.cli.HewsApp") as mock_app:
+        result = runner.invoke(cli, ["--search", "   "])
+
+    assert result.exit_code == 1
+    assert "Error: --search requires a non-empty query" in result.output
+    mock_app.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_and_print_stories_rejects_blank_query(capsys):
+    """The print helper also rejects blank search when called directly."""
+    mock_client = AsyncMock()
+
+    with pytest.raises(SystemExit) as exc_info:
+        await search_and_print_stories(mock_client, "   ")
+
+    assert exc_info.value.code == 1
+    assert "Error: --search requires a non-empty query" in capsys.readouterr().out
+    mock_client.search.assert_not_called()
 
 
 def test_cli_print_without_section_or_search_errors(runner):
@@ -229,6 +269,19 @@ def test_cli_section_print_network_error(runner):
         result = runner.invoke(cli, ["--section", "ask", "--print"])
         assert result.exit_code == 1
         assert "Error fetching stories: Network error" in result.output
+
+
+def test_cli_search_print_network_error(runner):
+    """Search failures in print mode use the search-specific error path."""
+    with patch("hews.cli.HNClient") as mock_client_class:
+        mock_client = AsyncMock()
+        mock_client.search = AsyncMock(side_effect=Exception("Network error"))
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        result = runner.invoke(cli, ["--search", "python", "--print"])
+
+    assert result.exit_code == 1
+    assert "Error searching stories: Network error" in result.output
 
 
 def test_cli_all_sections_valid():

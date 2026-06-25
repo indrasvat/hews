@@ -259,10 +259,16 @@ async def test_tui_offline_start_shows_cached_data_status(
 
 
 @pytest.mark.asyncio
-async def test_tui_offline_search_is_blocked_but_refresh_can_retry(
+async def test_tui_offline_search_can_retry_independent_network_path(
     fake_client: AsyncMock,
 ) -> None:
-    """Known offline mode blocks search while refresh can retry the network."""
+    """Known offline mode does not prevent search from retrying Algolia."""
+
+    async def search_recovers_network(_query: str, limit: int) -> list[Story]:
+        fake_client.is_offline = False
+        return fake_client.search.return_value
+
+    fake_client.search.side_effect = search_recovers_network
     app = HewsApp(hn_client=fake_client)
 
     async with app.run_test() as pilot:
@@ -277,11 +283,14 @@ async def test_tui_offline_search_is_blocked_but_refresh_can_retry(
         await pilot.press("/")
         await pilot.pause()
 
-        status = screen.query_one("#status", Static)
-        assert str(status.renderable) == "Cannot fetch new data while offline."
-        assert app.screen is screen
+        assert isinstance(app.screen, SearchDialog)
+        await pilot.press(*list("python"), "enter")
+        await pilot.pause()
 
-    fake_client.search.assert_not_called()
+        assert isinstance(app.screen, StoryListScreen)
+        assert app.screen.search_query == "python"
+
+    fake_client.search.assert_awaited_once_with("python", limit=30)
 
 
 @pytest.mark.asyncio
@@ -298,6 +307,25 @@ async def test_tui_client_errors_use_generic_load_message(
 
         status = screen.query_one("#status", Static)
         assert str(status.renderable) == "Error: Unable to load stories."
+
+
+@pytest.mark.asyncio
+async def test_tui_cold_offline_start_explains_missing_cache(
+    fake_client: AsyncMock,
+) -> None:
+    """Cold offline starts tell users that no cached section data is available."""
+    fake_client.is_offline = True
+    fake_client.fetch_stories.side_effect = HNClientError("network down")
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test():
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        status = screen.query_one("#status", Static)
+        assert (
+            str(status.renderable) == "Network unavailable and no cached stories found."
+        )
 
 
 @pytest.mark.asyncio
@@ -842,6 +870,44 @@ async def test_story_list_section_shortcut_loads_new_section(
     assert (
         fake_client.fetch_stories.await_args_list[-1].kwargs["force_refresh"] is False
     )
+
+
+@pytest.mark.asyncio
+async def test_story_list_rapid_section_switch_cancels_stale_load(
+    fake_client: AsyncMock,
+) -> None:
+    """A slow section fetch does not block a newer section shortcut."""
+    app = HewsApp(hn_client=fake_client)
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        assert isinstance(screen, StoryListScreen)
+
+        async def fetch_stories(
+            section: str,
+            limit: int = 30,
+            force_refresh: bool = False,
+        ) -> list[Story]:
+            if section == "new":
+                await asyncio.sleep(30)
+            return [
+                Story(
+                    id={"show": 2, "new": 3}.get(section, 1),
+                    type=ItemType.STORY,
+                    title=f"{section.title()} Story",
+                )
+            ]
+
+        fake_client.fetch_stories.side_effect = fetch_stories
+
+        await pilot.press("n")
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert screen.section == "show"
+        assert [story.title for story in screen.stories] == ["Show Story"]
+        assert fake_client.fetch_stories.await_args_list[-1].args == ("show",)
 
 
 @pytest.mark.asyncio
