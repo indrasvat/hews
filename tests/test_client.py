@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from unittest.mock import AsyncMock, Mock
@@ -531,6 +532,18 @@ class TestHNClient:
         mock_client.login.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_login_from_env_uses_complete_credentials(
+        self, mock_client, monkeypatch
+    ):
+        """Complete env credentials delegate to the normal login flow."""
+        monkeypatch.setenv("HN_USERNAME", "testuser")
+        monkeypatch.setenv("HN_PASSWORD", "secret")
+        mock_client.login = AsyncMock(return_value=True)
+
+        assert await mock_client.login_from_env() is True
+        mock_client.login.assert_awaited_once_with("testuser", "secret")
+
+    @pytest.mark.asyncio
     async def test_login_does_not_log_password(self, mock_client, capsys):
         """Failed login logging must not expose the password."""
         login_page = Mock()
@@ -785,6 +798,36 @@ class TestHNClient:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_upvote_network_error_returns_false(self, mock_client):
+        """Network failures during upvote return False rather than raising."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        mock_client._http_client.get.side_effect = httpx.RequestError(
+            "Connection failed"
+        )
+
+        result = await mock_client.upvote(123, is_comment=False)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_post_comment_network_error_returns_false(self, mock_client):
+        """Network failures during comment posting return False rather than raising."""
+        mock_client._http_client.cookies = httpx.Cookies()
+        mock_client._http_client.cookies.set(
+            "user", "testuser&hash", domain="news.ycombinator.com"
+        )
+        mock_client._http_client.get.side_effect = httpx.RequestError(
+            "Connection failed"
+        )
+
+        result = await mock_client.post_comment(123, "hello")
+
+        assert result is False
+
+    @pytest.mark.asyncio
     async def test_section_aliases(self, mock_client):
         """Test that section aliases work correctly."""
         mock_response = Mock()
@@ -984,6 +1027,14 @@ class TestHNClient:
 
 class TestHNClientIntegration:
     """Integration tests with real HN API calls."""
+
+    pytestmark = [
+        pytest.mark.integration,
+        pytest.mark.skipif(
+            os.environ.get("HEWS_LIVE_TESTS") != "1",
+            reason="set HEWS_LIVE_TESTS=1 to run live HN/Algolia tests",
+        ),
+    ]
 
     @pytest.mark.asyncio
     async def test_fetch_real_top_stories(self):

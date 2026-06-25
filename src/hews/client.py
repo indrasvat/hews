@@ -282,6 +282,8 @@ class HNClient:
                 return cached_stories
             self.is_offline = True
             raise HNClientError(f"Network error fetching {section} stories: {e}") from e
+        except HNClientError:
+            raise
         except Exception as e:
             raise HNClientError(
                 f"Unexpected error fetching {section} stories: {e}"
@@ -669,6 +671,8 @@ class HNClient:
         except httpx.RequestError as e:
             self.is_offline = True
             raise HNClientError(f"Network error searching for '{query}': {e}") from e
+        except HNClientError:
+            raise
         except Exception as e:
             raise HNClientError(f"Unexpected error searching for '{query}': {e}") from e
 
