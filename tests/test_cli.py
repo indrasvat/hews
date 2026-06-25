@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from hews import Story
-from hews.cli import cli
+from hews.cli import cli, search_and_print_stories
 from hews.models import ItemType
 
 
@@ -179,6 +179,19 @@ def test_cli_blank_search_errors(runner):
     assert result.exit_code == 1
     assert "Error: --search requires a non-empty query" in result.output
     mock_app.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_and_print_stories_rejects_blank_query(capsys):
+    """The print helper also rejects blank search when called directly."""
+    mock_client = AsyncMock()
+
+    with pytest.raises(SystemExit) as exc_info:
+        await search_and_print_stories(mock_client, "   ")
+
+    assert exc_info.value.code == 1
+    assert "Error: --search requires a non-empty query" in capsys.readouterr().out
+    mock_client.search.assert_not_called()
 
 
 def test_cli_print_without_section_or_search_errors(runner):
