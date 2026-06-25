@@ -38,4 +38,10 @@ make pre-commit  # Auto-fix issues and run all checks
 
 `uv sync` will create or update **uv.lock** – commit that file whenever it changes so CI and other developers get identical dependency versions.
 
+### Development
+
+Install dependencies with `make install-dev` or `uv sync --all-extras`.
+Run the CLI locally with `make run` or `uv run hews`.
+Build distribution artifacts with `uv build`, and run `make check` before committing.
+
 ---
