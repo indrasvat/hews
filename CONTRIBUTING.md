@@ -1,7 +1,7 @@
 # Contributing to Hews
 
 Thank you for taking the time to contribute!  This document outlines the
-basic workflow we expect for every pull-request.
+basic workflow we expect for every pull request.
 
 ## Development environment
 
