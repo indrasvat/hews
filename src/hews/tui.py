@@ -16,6 +16,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
@@ -254,9 +255,14 @@ Sections
   t                     Top stories
   n                     New stories
   a                     Ask HN
-  s                     Show HN
+  s                     Stats (top today)
+  Shift+s               Show HN
   Shift+j               Jobs
   r                     Refresh current section
+
+Stats
+  p / c                 Sort by points / comments
+  Orange                Stories under 2 hours old
 
 Search
   /                     Search stories
@@ -620,7 +626,8 @@ class StoryListScreen(Screen[None]):
         ("t", "switch_section('top')", "Top"),
         ("n", "switch_section('new')", "New"),
         ("a", "switch_section('ask')", "Ask"),
-        ("s", "switch_section('show')", "Show"),
+        ("s", "stats", "Stats"),
+        ("S", "switch_section('show')", "Show"),
         ("J", "switch_section('jobs')", "Jobs"),
         ("/", "search", "Search"),
     ]
@@ -746,6 +753,10 @@ class StoryListScreen(Screen[None]):
         self.search_query = None
         await self.load_stories(force_refresh=False)
 
+    async def action_stats(self) -> None:
+        """Open the live story statistics view."""
+        await self.app.push_screen(StatsScreen())
+
     async def action_search(self) -> None:
         """Prompt for a query and push a search-results screen."""
         if self.hews_app.is_offline:
@@ -818,6 +829,202 @@ class StoryListScreen(Screen[None]):
     def hews_app(self) -> "HewsApp":
         """Return the concrete Hews app instance for typed access."""
         return cast("HewsApp", self.app)
+
+
+class StatsChart(Static):
+    """Two-line chart with a fixed comment column and proportional point bar."""
+
+    def __init__(self, story: Story, rank: int, top_score: int) -> None:
+        super().__init__()
+        self.story = story
+        self.rank = rank
+        self.top_score = top_score
+
+    def render(self) -> Text:
+        """Fit titles and bars to the current terminal width, including wide text."""
+        width = max(1, self.content_size.width)
+        age = dt.datetime.now(dt.timezone.utc) - self.story.time
+        hot = dt.timedelta() <= age < dt.timedelta(hours=2)
+        color = "#ff8700" if hot else "#d7dce8"
+        bubble = Text(f"◯ {self.story.descendants or 0}", style=color)
+        bubble.truncate(width, overflow="ellipsis")
+        title_width = max(0, width - bubble.cell_len - 2)
+        story_title = " ".join((self.story.title or "Untitled").split())
+        title = (
+            Text(f"{self.rank}. {story_title}", style=color) if title_width else Text()
+        )
+        title.truncate(title_width, overflow="ellipsis")
+        title.pad_right(max(0, width - bubble.cell_len - title.cell_len))
+        title.append_text(bubble)
+        title.append("\n")
+        score = max(0, self.story.score or 0)
+        label = str(score)
+        indent = min(3, max(0, width - len(label) - 2))
+        available = max(0, width - indent - len(str(self.top_score)) - 1 - width // 5)
+        bar_width = (
+            (available * score + self.top_score // 2) // self.top_score
+            if self.top_score
+            else 0
+        )
+        if score and available:
+            bar_width = max(1, bar_width)
+        bar = Text(" " * indent)
+        bar.append("▓" * bar_width, style="#ff8700" if hot else "#7aa2f7")
+        bar.append(f" {label}", style=color)
+        bar.truncate(width, overflow="ellipsis")
+        title.append_text(bar)
+        return title
+
+
+class StatsStoryItem(ListItem):
+    """A selectable chart row."""
+
+    def __init__(self, story: Story, rank: int, top_score: int) -> None:
+        super().__init__()
+        self.story = story
+        self.rank = rank
+        self.top_score = top_score
+
+    def compose(self) -> ComposeResult:
+        """Render one story without interpreting titles as markup."""
+        yield StatsChart(self.story, self.rank, self.top_score)
+
+
+class StatsScreen(Screen[None]):
+    """Today's stories from the first 100 HN top stories, ranked by activity."""
+
+    BINDINGS = [
+        Binding("p", "sort_by('points')", "Points"),
+        Binding("c", "sort_by('comments')", "Comments"),
+        Binding("enter", "open_selected", "Open", priority=True),
+        Binding("right", "open_selected", "Open", priority=True),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+        ("r", "refresh", "Refresh"),
+        ("escape", "back", "Back"),
+        ("left", "back", "Back"),
+        ("b", "back", "Back"),
+        ("s", "back", "Back"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stories: list[Story] = []
+        self.sort_key = "points"
+        self._render_lock = asyncio.Lock()
+
+    def compose(self) -> ComposeResult:
+        """Match the sketch's bordered chart, centered heading, and footer."""
+        with Vertical(id="stats-frame"):
+            with Horizontal(id="stats-header"):
+                yield Static("○ ○ ○", id="stats-dots")
+                yield Static("top today · by points", id="stats-heading")
+                yield Static("", id="stats-header-spacer")
+            yield Static("Loading live HN stories…", id="stats-status")
+            yield ListView(id="stats-stories")
+            yield Static(
+                "p points · c comments · enter open · q quit", id="stats-footer"
+            )
+
+    def on_mount(self) -> None:
+        """Fetch live data without blocking keyboard input."""
+        self.run_worker(self.load_stories(), exclusive=True, group="stats-load")
+        self.set_interval(60, self.action_refresh)
+
+    def action_refresh(self) -> None:
+        """Refresh API values and story ages once a minute or on demand."""
+        self.run_worker(self.load_stories(), exclusive=True, group="stats-load")
+
+    async def load_stories(self) -> None:
+        """Bypass cached scores; disclose the client's offline fallback."""
+        status = self.query_one("#stats-status", Static)
+        status.display = True
+        status.update("Loading live HN stories…")
+        try:
+            stories = await cast("HewsApp", self.app).hn_client.fetch_stories(
+                "top", limit=100, force_refresh=True
+            )
+        except Exception:
+            status.update("Unable to load HN stats. Press r to retry.")
+            return
+        now = dt.datetime.now(dt.timezone.utc)
+        self.stories = [
+            story
+            for story in stories
+            if not story.dead
+            and not story.deleted
+            and dt.timedelta() <= now - story.time < dt.timedelta(days=1)
+        ]
+        await self.display_stories()
+        offline = cast("HewsApp", self.app).is_offline
+        status.update(
+            "Network unavailable · showing cached stats [offline]"
+            if offline
+            else "No stories from the past 24 hours in HN's top 100."
+        )
+        status.display = offline or not self.stories
+
+    async def action_sort_by(self, key: str) -> None:
+        """Change ranking while retaining points as the bar metric."""
+        self.sort_key = key
+        await self.display_stories()
+
+    async def display_stories(self) -> None:
+        """Serialize refresh and sort renders so their row updates cannot overlap."""
+        async with self._render_lock:
+            await self._display_stories()
+
+    async def _display_stories(self) -> None:
+        """Rebuild chart rows and keep the same story selected after sorting."""
+        view = self.query_one("#stats-stories", ListView)
+        selected = view.highlighted_child
+        selected_id = (
+            selected.story.id if isinstance(selected, StatsStoryItem) else None
+        )
+        self.stories.sort(
+            key=lambda story: (story.descendants or 0)
+            if self.sort_key == "comments"
+            else (story.score or 0),
+            reverse=True,
+        )
+        top_score = max((story.score or 0 for story in self.stories), default=0)
+        await view.clear()
+        await view.extend(
+            StatsStoryItem(story, rank, top_score)
+            for rank, story in enumerate(self.stories, 1)
+        )
+        if self.stories:
+            view.index = next(
+                (i for i, story in enumerate(self.stories) if story.id == selected_id),
+                0,
+            )
+        view.focus()
+        self.query_one("#stats-heading", Static).update(
+            f"top today · by {self.sort_key}"
+        )
+
+    async def action_open_selected(self) -> None:
+        """Open the selected story's existing detail and comments screen."""
+        selected = self.query_one("#stats-stories", ListView).highlighted_child
+        if isinstance(selected, StatsStoryItem):
+            await self.app.push_screen(CommentsScreen(selected.story))
+
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Open a chart row on mouse activation."""
+        event.stop()
+        await self.action_open_selected()
+
+    def action_cursor_down(self) -> None:
+        """Move to the next chart row."""
+        self.query_one("#stats-stories", ListView).action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move to the previous chart row."""
+        self.query_one("#stats-stories", ListView).action_cursor_up()
+
+    def action_back(self) -> None:
+        """Return to the invoking story list."""
+        self.app.pop_screen()
 
 
 class HewsApp(App[None]):
