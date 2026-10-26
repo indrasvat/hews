@@ -143,3 +143,71 @@ HelpScreen {
     padding: 0 2 1 2;
     background: $surface;
 }
+
+StatsScreen {
+    background: #151b28;
+    padding: 1 2;
+    align: center middle;
+}
+
+#stats-frame {
+    width: 100%;
+    max-width: 110;
+    height: 100%;
+    border: solid #7a8ba8;
+    background: #1b2333;
+}
+
+#stats-header {
+    height: 3;
+    border-bottom: solid #7a8ba8;
+}
+
+#stats-dots, #stats-header-spacer {
+    width: 9;
+    height: 2;
+    content-align: center middle;
+    color: #7a8ba8;
+}
+
+#stats-heading {
+    width: 1fr;
+    height: 2;
+    content-align: center middle;
+    text-style: italic bold;
+    color: #d7dce8;
+}
+
+#stats-status {
+    height: auto;
+    padding: 0 2;
+    color: #ff8700;
+}
+
+#stats-stories {
+    height: 1fr;
+    padding: 1 1 0 1;
+    background: #1b2333;
+    scrollbar-size: 1 1;
+}
+
+StatsStoryItem {
+    height: 3;
+    padding: 0 1;
+    background: #1b2333;
+}
+
+StatsStoryItem.-highlight {
+    background: #28354b;
+}
+
+StatsChart {
+    height: 2;
+}
+
+#stats-footer {
+    height: 2;
+    border-top: solid #7a8ba8;
+    padding: 0 2;
+    color: #d7dce8;
+}
